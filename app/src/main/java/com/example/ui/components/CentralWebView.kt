@@ -190,7 +190,31 @@ fun CentralWebView(
                                 val reqUrl = request?.url?.toString() ?: return false
                                 val isRedirect = request?.isRedirect == true
                                 val isMainFrame = request?.isForMainFrame == true
-                                android.util.Log.d("CentralAutoLogin", "-> [Redirect/Nav] Req: $reqUrl | Redirect: $isRedirect | MainFrame: $isMainFrame")
+
+                                val uri = try { Uri.parse(reqUrl) } catch (e: Exception) { null }
+                                val scheme = uri?.scheme ?: ""
+                                val host = uri?.host ?: ""
+                                val path = uri?.path ?: ""
+                                val query = uri?.query ?: ""
+                                val queryParams = try {
+                                    uri?.queryParameterNames?.associateWith { uri.getQueryParameter(it) } ?: emptyMap()
+                                } catch (e: Exception) {
+                                    emptyMap()
+                                }
+
+                                android.util.Log.i("FCM_WebView_Integration", "-> [NAV CHECK] URL: $reqUrl | Scheme: '$scheme' | Host: '$host' | Path: '$path' | Query: '$query' | Redirect: $isRedirect | MainFrame: $isMainFrame")
+
+                                // Detailed logging for centralassinanteappixc:// deep link scheme
+                                if (scheme == "centralassinanteappixc" || reqUrl.contains("centralassinanteappixc")) {
+                                    android.util.Log.i("FCM_WebView_Integration", "===============================================")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> [CENTRAL DEEP LINK DETECTED] FULL URL: $reqUrl")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> Scheme: $scheme")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> Host: $host")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> Path: $path")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> Query String: $query")
+                                    android.util.Log.i("FCM_WebView_Integration", "-> Query Params: $queryParams")
+                                    android.util.Log.i("FCM_WebView_Integration", "===============================================")
+                                }
 
                                 // Open WhatsApp or external non-http schemes in external apps
                                 if (reqUrl.startsWith("whatsapp://") || reqUrl.contains("wa.me/") || reqUrl.startsWith("tel:") || reqUrl.startsWith("mailto:")) {
@@ -221,7 +245,8 @@ fun CentralWebView(
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
                                 val cookies = url?.let { CookieManager.getInstance().getCookie(it) } ?: "Nenhum"
-                                android.util.Log.d("CentralAutoLogin", "-> [onPageStarted] URL: $url | Cookies: $cookies")
+                                val uri = url?.let { try { Uri.parse(it) } catch (e: Exception) { null } }
+                                android.util.Log.i("FCM_WebView_Integration", "-> [PAGE STARTED] URL: $url | Scheme: ${uri?.scheme} | Host: ${uri?.host} | Path: ${uri?.path} | Query: ${uri?.query} | Cookies: $cookies")
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -230,7 +255,9 @@ fun CentralWebView(
                                 isError = false
                                 CookieManager.getInstance().flush()
                                 val cookies = url?.let { CookieManager.getInstance().getCookie(it) } ?: "Nenhum"
-                                android.util.Log.d("CentralAutoLogin", "-> [onPageFinished] URL Final: $url | Cookies Criados/Sessão: $cookies")
+                                val uri = url?.let { try { Uri.parse(it) } catch (e: Exception) { null } }
+                                android.util.Log.i("FCM_WebView_Integration", "-> [PAGE FINISHED] URL: $url | Scheme: ${uri?.scheme} | Host: ${uri?.host} | Path: ${uri?.path} | Query: ${uri?.query} | Cookies: $cookies")
+
                                 url?.let {
                                     lastRequestedUrl = it
                                     onUrlChanged(it)
@@ -239,6 +266,162 @@ fun CentralWebView(
                                     if (t.isNotBlank() && !t.startsWith("http")) {
                                         onTitleChanged(t)
                                     }
+                                }
+
+                                // Read-only diagnostics via evaluateJavascript to check keys in localStorage, sessionStorage, cookies, and window
+                                val diagnosticScript = """
+                                    (function() {
+                                        try {
+                                            var res = {};
+                                            
+                                            // 1. LocalStorage keys
+                                            var lsKeys = [];
+                                            if (typeof localStorage !== 'undefined') {
+                                                for (var i = 0; i < localStorage.length; i++) {
+                                                    lsKeys.push(localStorage.key(i));
+                                                }
+                                            }
+                                            res.localStorageKeys = lsKeys;
+
+                                            // 2. SessionStorage keys
+                                            var ssKeys = [];
+                                            if (typeof sessionStorage !== 'undefined') {
+                                                for (var i = 0; i < sessionStorage.length; i++) {
+                                                    ssKeys.push(sessionStorage.key(i));
+                                                }
+                                            }
+                                            res.sessionStorageKeys = ssKeys;
+
+                                            // 3. Cookie names
+                                            var cookieNames = [];
+                                            if (document.cookie) {
+                                                cookieNames = document.cookie.split(';').map(function(c){ return c.split('=')[0].trim(); });
+                                            }
+                                            res.cookieNames = cookieNames;
+
+                                            // 4. Matching storage keys for fcm/firebase/token/device/push
+                                            var pattern = /firebase|fcm|token|device|push/i;
+                                            res.matchingLsKeys = lsKeys.filter(function(k){ return pattern.test(k); });
+                                            res.matchingSsKeys = ssKeys.filter(function(k){ return pattern.test(k); });
+
+                                            // 5. Matching window properties
+                                            var winProps = [];
+                                            for (var prop in window) {
+                                                if (pattern.test(prop)) {
+                                                    winProps.push(prop);
+                                                }
+                                            }
+                                            res.matchingWindowProps = winProps;
+
+                                            return JSON.stringify(res);
+                                        } catch(e) {
+                                            return "ERROR: " + e.toString();
+                                        }
+                                    })();
+                                """.trimIndent()
+
+                                view?.evaluateJavascript(diagnosticScript) { result ->
+                                    android.util.Log.i("FCM_WebView_Diagnostics", "===============================================")
+                                    android.util.Log.i("FCM_WebView_Diagnostics", "-> [READ-ONLY DIAGNOSTICS FOR URL]: $url")
+                                    android.util.Log.i("FCM_WebView_Diagnostics", "-> [STORAGE/COOKIES/WINDOW KEYS]: $result")
+                                    android.util.Log.i("FCM_WebView_Diagnostics", "===============================================")
+                                }
+
+                                // Audit window.iniciaFirebase and related FCM/Firebase functions
+                                val iniciaFirebaseAuditScript = """
+                                    (function() {
+                                        try {
+                                            var res = {};
+                                            var fn = window.iniciaFirebase;
+                                            if (typeof fn !== 'undefined') {
+                                                res.iniciaFirebase = {
+                                                    exists: true,
+                                                    type: typeof fn,
+                                                    length: typeof fn === 'function' ? fn.length : null,
+                                                    name: typeof fn === 'function' ? (fn.name || 'iniciaFirebase') : null,
+                                                    source: typeof fn === 'function' ? fn.toString() : String(fn)
+                                                };
+                                            } else {
+                                                res.iniciaFirebase = { exists: false };
+                                            }
+
+                                            var pattern = /firebase|fcm|token|push/i;
+                                            var related = [];
+                                            for (var prop in window) {
+                                                try {
+                                                    if (pattern.test(prop)) {
+                                                        var t = typeof window[prop];
+                                                        var obj = { name: prop, type: t };
+                                                        if (t === 'function') {
+                                                            obj.length = window[prop].length;
+                                                            obj.source = window[prop].toString();
+                                                        }
+                                                        related.push(obj);
+                                                    }
+                                                } catch(e) {}
+                                            }
+                                            res.relatedFunctions = related;
+                                            return JSON.stringify(res);
+                                        } catch(e) {
+                                            return "ERROR: " + e.toString();
+                                        }
+                                    })();
+                                """.trimIndent()
+
+                                view?.evaluateJavascript(iniciaFirebaseAuditScript) { result ->
+                                    android.util.Log.i("FCM_WebView_Function", "===============================================")
+                                    android.util.Log.i("FCM_WebView_Function", "-> [INICIA_FIREBASE AUDIT FOR URL]: $url")
+                                    android.util.Log.i("FCM_WebView_Function", "-> [RESULT RAW]: $result")
+                                    android.util.Log.i("FCM_WebView_Function", "===============================================")
+                                }
+
+                                // Audit HotsiteWeb (read-only)
+                                val hotsiteWebAuditScript = """
+                                    (function() {
+                                        try {
+                                            var res = {};
+                                            var hType = typeof window.HotsiteWeb;
+                                            res.hotsiteWebType = hType;
+
+                                            if (hType !== 'undefined') {
+                                                res.hotsiteWebSource = window.HotsiteWeb.toString();
+
+                                                var proto = window.HotsiteWeb.prototype;
+                                                if (proto) {
+                                                    var protoMethods = [];
+                                                    for (var prop in proto) {
+                                                        protoMethods.push({
+                                                            name: prop,
+                                                            type: typeof proto[prop]
+                                                        });
+                                                    }
+                                                    res.prototypeMethods = protoMethods;
+
+                                                    if (typeof proto.updateFirebaseToken === 'function') {
+                                                        res.updateFirebaseToken = {
+                                                            exists: true,
+                                                            type: typeof proto.updateFirebaseToken,
+                                                            length: proto.updateFirebaseToken.length,
+                                                            source: proto.updateFirebaseToken.toString()
+                                                        };
+                                                    } else {
+                                                        res.updateFirebaseToken = { exists: false };
+                                                    }
+                                                }
+                                            }
+
+                                            return JSON.stringify(res);
+                                        } catch(e) {
+                                            return "ERROR: " + e.toString();
+                                        }
+                                    })();
+                                """.trimIndent()
+
+                                view?.evaluateJavascript(hotsiteWebAuditScript) { result ->
+                                    android.util.Log.i("FCM_HotsiteWeb_Audit", "===============================================")
+                                    android.util.Log.i("FCM_HotsiteWeb_Audit", "-> [HOTSITE_WEB AUDIT FOR URL]: $url")
+                                    android.util.Log.i("FCM_HotsiteWeb_Audit", "-> [RESULT RAW]: $result")
+                                    android.util.Log.i("FCM_HotsiteWeb_Audit", "===============================================")
                                 }
                             }
 

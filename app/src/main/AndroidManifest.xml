@@ -47,6 +47,13 @@
                     android:host="sac2.alfatechtelecom.com.br"
                     android:pathPrefix="/central_assinante_web" />
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="centralassinanteappixc" />
+            </intent-filter>
         </activity>
 
         <service

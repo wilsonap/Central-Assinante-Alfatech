@@ -43,6 +43,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             ?: "https://sac2.alfatechtelecom.com.br/central_assinante_web/"
 
         Log.i(TAG, "FCM MESSAGE RECEIVED")
+        Log.i(TAG, "notification.title: ${remoteMessage.notification?.title}")
+        Log.i(TAG, "notification.body: ${remoteMessage.notification?.body}")
+        Log.i(TAG, "remoteMessage.data: ${remoteMessage.data}")
         Log.i(TAG, "FCM MESSAGE RECEIVED - Title: '$title' | Body: '$body' | Data: ${remoteMessage.data}")
 
         // Save to Room database locally for the notification drawer/sheet

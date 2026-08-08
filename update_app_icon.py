@@ -1,4 +1,26 @@
-<?xml version="1.0" encoding="utf-8"?>
+import os
+import subprocess
+
+res_dir = "app/src/main/res"
+
+# 1. Update Background XML (Pure White)
+bg_xml = """<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>
+"""
+
+with open(f"{res_dir}/drawable/ic_launcher_background.xml", "w") as f:
+    f.write(bg_xml)
+
+# 2. Update Foreground XML (Perfectly centered inside 66dp safe zone: x=21..87, y=21..87, center=54,54)
+fg_xml = """<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
@@ -121,3 +143,9 @@
     </path>
 
 </vector>
+"""
+
+with open(f"{res_dir}/drawable/ic_launcher_foreground.xml", "w") as f:
+    f.write(fg_xml)
+
+print("Vector drawables updated!")
