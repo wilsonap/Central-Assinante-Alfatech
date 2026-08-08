@@ -1,0 +1,6 @@
+{
+  "name": "Central Assinante Alfatech",
+  "description": "Aplicativo oficial da Central do Assinante Alfatech Telecom. Acesse faturas, 2ª via de boletos, notificações e suporte.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

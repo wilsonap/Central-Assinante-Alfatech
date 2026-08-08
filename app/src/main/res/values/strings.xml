@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Central Assinante Alfatech</string>
+    <string name="default_notification_channel_id">central_alfatech_channel</string>
+    <string name="default_notification_channel_name">Notificações Alfatech</string>
+    <string name="default_notification_channel_desc">Avisos importantes sobre faturas, manutenção e suporte técnico.</string>
+    <string name="offline_title">Sem conexão com a internet</string>
+    <string name="offline_message">Por favor, verifique sua rede Wi-Fi ou dados móveis para acessar a Central do Assinante Alfatech.</string>
+    <string name="btn_retry">Tentar novamente</string>
+    <string name="btn_support">Falar com Atendimento</string>
+    <string name="nav_home">Central</string>
+    <string name="nav_invoices">Faturas / 2ª Via</string>
+    <string name="nav_notifications">Notificações</string>
+    <string name="nav_support">Suporte</string>
+</resources>
