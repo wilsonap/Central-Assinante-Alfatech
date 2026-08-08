@@ -18,28 +18,65 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+/**
+ * Armazenamento local simples do token FCM atual.
+ * Atualizado por getToken / onNewToken. A Central associa o token via
+ * ACTION=updateFirebaseToken (dados_cliente.php) — sem POST inventado aqui.
+ */
+object FcmTokenStore {
+    private const val PREFS = "alfatech_fcm_prefs"
+    private const val KEY_TOKEN = "fcm_token"
+
+    @Volatile
+    private var memoryToken: String = ""
+
+    fun update(context: Context, token: String) {
+        if (token.isBlank()) return
+        memoryToken = token
+        context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_TOKEN, token)
+            .apply()
+    }
+
+    fun current(context: Context): String {
+        if (memoryToken.isNotEmpty()) return memoryToken
+        memoryToken = context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_TOKEN, "")
+            .orEmpty()
+        return memoryToken
+    }
+
+    fun mask(token: String): String {
+        if (token.isBlank()) return "(vazio)"
+        if (token.length <= 12) return "***"
+        return token.take(6) + "..." + token.takeLast(4)
+    }
+}
+
 class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.i(TAG, "onNewToken - Novo Token FCM gerado!")
-        Log.i(TAG, "FCM TOKEN: $token")
-        Log.i(TAG, "FCM TOKEN NOVO APP: $token")
-        sendTokenToBackend(token)
+        FcmTokenStore.update(applicationContext, token)
+        Log.i(TAG, "onNewToken - token local atualizado: ${FcmTokenStore.mask(token)}")
+        Log.i("FCM_TOKEN_REGISTERED", "local_store updated token=${FcmTokenStore.mask(token)}")
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
-        
-        val title = remoteMessage.notification?.title 
-            ?: remoteMessage.data["title"] 
+
+        val title = remoteMessage.notification?.title
+            ?: remoteMessage.data["title"]
             ?: "Alfatech Telecom"
-            
-        val body = remoteMessage.notification?.body 
-            ?: remoteMessage.data["body"] 
+
+        val body = remoteMessage.notification?.body
+            ?: remoteMessage.data["body"]
             ?: "Você possui uma nova mensagem na Central."
-            
-        val targetUrl = remoteMessage.data["url"] 
+
+        val targetUrl = remoteMessage.data["url"]
             ?: "https://sac2.alfatechtelecom.com.br/central_assinante_web/"
 
         Log.i(TAG, "FCM MESSAGE RECEIVED")
@@ -48,7 +85,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.i(TAG, "remoteMessage.data: ${remoteMessage.data}")
         Log.i(TAG, "FCM MESSAGE RECEIVED - Title: '$title' | Body: '$body' | Data: ${remoteMessage.data}")
 
-        // Save to Room database locally for the notification drawer/sheet
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = AppDatabase.getDatabase(applicationContext)
@@ -112,12 +148,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.i(TAG, "Notificação exibida no Android - ID: $notificationId")
     }
 
-    private fun sendTokenToBackend(token: String) {
-        Log.i(TAG, "Registered FCM Token for Alfatech Central: $token")
-    }
-
     companion object {
         private const val TAG = "AlfatechFCM"
     }
 }
-

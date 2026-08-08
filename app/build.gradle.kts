@@ -59,12 +59,6 @@ android {
         keyPassword = "android"
       }
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
   }
 
   buildTypes {
@@ -74,7 +68,7 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    // debug: assinatura padrão do Android/Gradle (sem debug.keystore local no projeto)
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

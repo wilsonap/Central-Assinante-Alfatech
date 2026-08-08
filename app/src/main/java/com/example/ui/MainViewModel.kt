@@ -5,8 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
 import com.example.data.local.NotificationEntity
+import com.example.service.FcmTokenStore
 import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +26,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = emptyList()
         )
 
-    private val _fcmToken = MutableStateFlow("")
+    private val _fcmToken = MutableStateFlow(FcmTokenStore.current(application))
     val fcmToken: StateFlow<String> = _fcmToken.asStateFlow()
 
     // 0 = Home Screen (Native), 1 = WebView Screen
@@ -131,17 +131,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Atualiza estado Compose a partir do store (ex.: após onNewToken). */
+    fun syncFcmTokenFromStore() {
+        val token = FcmTokenStore.current(getApplication())
+        if (token.isNotEmpty() && token != _fcmToken.value) {
+            _fcmToken.value = token
+        }
+    }
+
     private fun retrieveFcmToken() {
         try {
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (task.isSuccessful && task.result != null) {
                     val token = task.result
+                    FcmTokenStore.update(getApplication(), token)
                     _fcmToken.value = token
-                    android.util.Log.i("AlfatechFCM", "FCM TOKEN: $token")
-                    android.util.Log.i("AlfatechFCM", "FCM TOKEN NOVO APP: $token")
+                    android.util.Log.i(
+                        "FCM_TOKEN_READY",
+                        "token obtido no ViewModel mask=${FcmTokenStore.mask(token)}"
+                    )
                 } else {
-                    val exception = task.exception
-                    android.util.Log.e("AlfatechFCM", "Erro ao obter token FCM", exception)
+                    android.util.Log.e("AlfatechFCM", "Erro ao obter token FCM", task.exception)
                 }
             }
         } catch (e: Exception) {
