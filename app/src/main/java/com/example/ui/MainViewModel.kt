@@ -3,16 +3,19 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.PushNotificationRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.NotificationEntity
 import com.example.service.FcmTokenStore
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -128,6 +131,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAllNotifications() {
         viewModelScope.launch {
             notificationDao.clearAll()
+        }
+    }
+
+    fun markAllNotificationsAsRead() {
+        viewModelScope.launch {
+            notificationDao.markAllAsRead()
+        }
+    }
+
+    /**
+     * Persiste push aberto a partir da bandeja (extras do Intent).
+     * Sem title/body nos extras (notification-only), não inventa conteúdo.
+     */
+    fun persistPushFromIntentExtras(
+        title: String?,
+        body: String?,
+        type: String?,
+        messageId: String?,
+        targetUrl: String?
+    ) {
+        if (title.isNullOrBlank() && body.isNullOrBlank()) {
+            android.util.Log.w(
+                "FCM_INTENT_EXTRAS",
+                "sem title/body nos extras — provavelmente notification-only; " +
+                    "servidor precisa enviar data.title/data.body/data.type/data.url/data.message_id"
+            )
+            return
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                PushNotificationRepository.persistFromPush(
+                    context = getApplication(),
+                    title = title,
+                    body = body,
+                    type = type,
+                    messageId = messageId,
+                    targetUrl = targetUrl
+                )
+            }
         }
     }
 

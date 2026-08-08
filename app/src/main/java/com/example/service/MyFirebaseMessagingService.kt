@@ -1,17 +1,15 @@
 package com.example.service
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
-import com.example.data.local.AppDatabase
-import com.example.data.local.NotificationEntity
+import com.example.data.PushNotificationRepository
+import com.example.notifications.NotificationChannels
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -76,58 +74,75 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             ?: remoteMessage.data["body"]
             ?: "Você possui uma nova mensagem na Central."
 
+        val type = remoteMessage.data["type"] ?: "general"
+
         val targetUrl = remoteMessage.data["url"]
+            ?: remoteMessage.data["target_url"]
             ?: "https://sac2.alfatechtelecom.com.br/central_assinante_web/"
 
-        Log.i(TAG, "FCM MESSAGE RECEIVED")
+        val messageId = remoteMessage.messageId
+            ?: remoteMessage.data["message_id"]
+            ?: remoteMessage.data["google.message_id"]
+
+        val hasNotificationPayload = remoteMessage.notification != null
+        val hasDataPayload = remoteMessage.data.isNotEmpty()
+        val payloadKind = when {
+            hasNotificationPayload && hasDataPayload -> "notification+data"
+            hasNotificationPayload -> "notification"
+            else -> "data-only"
+        }
+
+        Log.i(TAG, "FCM MESSAGE RECEIVED payloadKind=$payloadKind messageId=$messageId")
         Log.i(TAG, "notification.title: ${remoteMessage.notification?.title}")
         Log.i(TAG, "notification.body: ${remoteMessage.notification?.body}")
         Log.i(TAG, "remoteMessage.data: ${remoteMessage.data}")
-        Log.i(TAG, "FCM MESSAGE RECEIVED - Title: '$title' | Body: '$body' | Data: ${remoteMessage.data}")
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val db = AppDatabase.getDatabase(applicationContext)
-                db.notificationDao().insertNotification(
-                    NotificationEntity(
-                        title = title,
-                        body = body,
-                        type = remoteMessage.data["type"] ?: "general"
-                    )
+                PushNotificationRepository.persistFromPush(
+                    context = applicationContext,
+                    title = title,
+                    body = body,
+                    type = type,
+                    messageId = messageId,
+                    targetUrl = targetUrl
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao salvar notificação no banco de dados local", e)
             }
         }
 
-        showNotification(title, body, targetUrl)
+        // onMessageReceived só roda quando o sistema NÃO exibiu a notificação
+        // (foreground com notification, ou data-only). Evita bandeja duplicada.
+        showNotification(title, body, type, messageId, targetUrl)
     }
 
-    private fun showNotification(title: String, body: String, url: String) {
+    private fun showNotification(
+        title: String,
+        body: String,
+        type: String,
+        messageId: String?,
+        url: String
+    ) {
+        NotificationChannels.ensureCreated(this)
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = getString(R.string.default_notification_channel_id)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                getString(R.string.default_notification_channel_name),
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = getString(R.string.default_notification_channel_desc)
-                enableVibration(true)
-                enableLights(true)
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
+        val channelId = NotificationChannels.CHANNEL_CENTRAL
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("target_url", url)
+            putExtra("title", title)
+            putExtra("body", body)
+            putExtra("type", type)
+            if (!messageId.isNullOrBlank()) {
+                putExtra("message_id", messageId)
+                putExtra("google.message_id", messageId)
+            }
         }
 
         val pendingIntent = PendingIntent.getActivity(
             this,
-            System.currentTimeMillis().toInt(),
+            (messageId?.hashCode() ?: System.currentTimeMillis().toInt()),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -143,7 +158,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .build()
 
-        val notificationId = (System.currentTimeMillis() % 100000).toInt()
+        val notificationId = (messageId?.hashCode() ?: (System.currentTimeMillis() % 100000).toInt())
         notificationManager.notify(notificationId, notification)
         Log.i(TAG, "Notificação exibida no Android - ID: $notificationId")
     }

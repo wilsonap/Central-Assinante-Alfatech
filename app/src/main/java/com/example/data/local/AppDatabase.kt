@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [NotificationEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,10 +24,18 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "alfatech_database"
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2)
                     .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+
+        /** Expõe a instância singleton para testes; preferir [getDatabase] em produção. */
+        fun clearInstanceForTests() {
+            synchronized(this) {
+                INSTANCE?.close()
+                INSTANCE = null
             }
         }
     }

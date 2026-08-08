@@ -70,6 +70,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.notifications.NotificationChannels
 import com.example.ui.MainViewModel
 import com.example.ui.components.CentralWebView
 import com.example.ui.screens.HomeScreen
@@ -88,12 +89,9 @@ class MainActivity : ComponentActivity() {
         // Enable global cookies for auto-login persistence
         android.webkit.CookieManager.getInstance().setAcceptCookie(true)
 
-        // Create Default FCM Notification Channel
-        createNotificationChannel()
+        NotificationChannels.ensureCreated(this)
 
-        intent?.getStringExtra("target_url")?.let { targetUrl ->
-            viewModel.setTargetUrl(targetUrl)
-        }
+        handleNotificationIntent(intent)
 
         setContent {
             MyApplicationTheme {
@@ -110,26 +108,51 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getStringExtra("target_url")?.let { targetUrl ->
-            viewModel.setTargetUrl(targetUrl)
-        }
+        setIntent(intent)
+        handleNotificationIntent(intent)
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = getString(R.string.default_notification_channel_id)
-            val channelName = getString(R.string.default_notification_channel_name)
-            val channelDesc = getString(R.string.default_notification_channel_desc)
-            val importance = android.app.NotificationManager.IMPORTANCE_HIGH
-            val channel = android.app.NotificationChannel(channelId, channelName, importance).apply {
-                description = channelDesc
-                enableVibration(true)
-                enableLights(true)
-            }
-            val notificationManager = getSystemService(android.app.NotificationManager::class.java)
-            notificationManager?.createNotificationChannel(channel)
+    /**
+     * Lê extras de toque na bandeja (FCM system ou PendingIntent local)
+     * e persiste em Avisos quando houver title/body no data.
+     */
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent == null) return
+        val extras = intent.extras ?: return
+
+        val keys = extras.keySet().sorted().joinToString(",")
+        android.util.Log.i("FCM_INTENT_EXTRAS", "keys=[$keys]")
+
+        val title = extras.getString("title")
+            ?: extras.getString("gcm.notification.title")
+        val body = extras.getString("body")
+            ?: extras.getString("message")
+            ?: extras.getString("gcm.notification.body")
+        val type = extras.getString("type")
+        val targetUrl = extras.getString("target_url")
+            ?: extras.getString("url")
+        val messageId = extras.getString("google.message_id")
+            ?: extras.getString("message_id")
+
+        android.util.Log.i(
+            "FCM_INTENT_EXTRAS",
+            "title=${!title.isNullOrBlank()} body=${!body.isNullOrBlank()} " +
+                "type=$type messageId=$messageId hasUrl=${!targetUrl.isNullOrBlank()}"
+        )
+
+        if (!targetUrl.isNullOrBlank()) {
+            viewModel.setTargetUrl(targetUrl)
         }
+
+        viewModel.persistPushFromIntentExtras(
+            title = title,
+            body = body,
+            type = type,
+            messageId = messageId,
+            targetUrl = targetUrl
+        )
     }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -166,6 +189,13 @@ fun AlfatechMainApp(
             ) {
                 permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+    }
+
+    // Ao abrir Avisos e Comunicados, zera o badge do sino
+    LaunchedEffect(showNotificationsSheet) {
+        if (showNotificationsSheet) {
+            viewModel.markAllNotificationsAsRead()
         }
     }
 
