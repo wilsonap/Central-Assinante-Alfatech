@@ -202,12 +202,10 @@ fun AlfatechMainApp(
     // Handle physical / gesture back button
     BackHandler(enabled = true) {
         if (currentScreen == 1) {
-            // Na raiz da Central (ou sem histórico web): volta para a Home nativa.
-            // Em subpáginas com histórico: navega dentro da WebView.
-            if (viewModel.isAtCentralRoot() || !canWebViewGoBack()) {
-                viewModel.navigateToHome()
-            } else {
+            if (canWebViewGoBack()) {
                 webViewGoBack()
+            } else {
+                viewModel.navigateToHome()
             }
         } else {
             (context as? ComponentActivity)?.finish()
@@ -294,8 +292,11 @@ fun AlfatechMainApp(
                             navigationIcon = {
                                 IconButton(
                                     onClick = {
-                                        // Seta da barra azul: sempre volta para a Home nativa completa
-                                        viewModel.navigateToHome()
+                                        if (canWebViewGoBack()) {
+                                            webViewGoBack()
+                                        } else {
+                                            viewModel.navigateToHome()
+                                        }
                                     }
                                 ) {
                                     Icon(
@@ -387,12 +388,10 @@ fun AlfatechMainApp(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Keep CentralWebView in Composition so session/cookies/JS remain active continuously.
-            // Hide its native surface while Home is active to avoid z-order / empty-home bugs.
+            // Keep CentralWebView in Composition so session/cookies/JS remain active continuously
             CentralWebView(
                 url = currentUrl,
                 fcmToken = fcmToken,
-                isVisible = currentScreen == 1,
                 onWebViewCreated = onWebViewCreated,
                 onTitleChanged = { newTitle ->
                     viewModel.updateWebTitle(newTitle)
