@@ -57,7 +57,9 @@ import com.example.ui.WhatsAppSupport
 import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import android.util.Log
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -71,7 +73,9 @@ fun CentralWebView(
     onTitleChanged: (String) -> Unit = {},
     onUrlChanged: (String) -> Unit = {},
     onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit = { _, _, _, _ -> },
-    onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit = { _, _, _ -> }
+    onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit = { _, _, _ -> },
+    /** Chamado após transição autenticada + ciclo de refreshCentralCustomerData (ou retries esgotados). */
+    onPostLoginReady: (trigger: String) -> Unit = {}
 ) {
     // fcmToken Compose param retained for call-site compatibility; never frozen into the bridge.
     @Suppress("UNUSED_PARAMETER")
@@ -84,6 +88,38 @@ fun CentralWebView(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var lastRequestedUrl by remember { mutableStateOf("") }
     val bridgeController = remember { FcmBridgeController() }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val dataRefreshGeneration = remember { AtomicInteger(0) }
+    val recoveringFromError = remember { AtomicBoolean(false) }
+
+    fun scheduleCustomerDataRefresh(
+        webView: WebView,
+        trigger: String,
+        onCycleFinished: (() -> Unit)? = null
+    ) {
+        scheduleCentralCustomerDataRefresh(
+            webView = webView,
+            trigger = trigger,
+            handler = mainHandler,
+            generation = dataRefreshGeneration,
+            onWhatsAppConfigFound = onWhatsAppConfigFound,
+            onClientProfileFound = onClientProfileFound,
+            onCycleFinished = onCycleFinished
+        )
+    }
+
+    LaunchedEffect(bridgeController) {
+        bridgeController.setOnSessionAuthenticated { webView, trigger ->
+            val authType = if (trigger == "login_authenticated") "manual" else "automatic"
+            Log.i("CENTRAL_POST_LOGIN", "auth_transition=unauthenticated_to_authenticated")
+            Log.i("CENTRAL_POST_LOGIN", "auth_type=$authType")
+            Log.i("CENTRAL_POST_LOGIN", "data_refresh_started=true")
+            scheduleCustomerDataRefresh(webView, trigger) {
+                Log.i("CENTRAL_POST_LOGIN", "data_refresh_finished=true")
+                onPostLoginReady(trigger)
+            }
+        }
+    }
 
     LaunchedEffect(url, webViewRef) {
         val wv = webViewRef
@@ -291,10 +327,14 @@ fun CentralWebView(
                                         onTitleChanged(t)
                                     }
                                 }
-                                // Capture WhatsApp number from Central DOM after authenticated pages load.
+                                // Captura WhatsApp/perfil — também reagendada após login autenticado.
                                 if (view != null && !FcmBridgeController.isAuthBlockedUrl(url)) {
-                                    extractWhatsAppFromDom(view, onWhatsAppConfigFound)
-                                    extractClientProfileFromStorage(view, onClientProfileFound)
+                                    val trigger = if (recoveringFromError.getAndSet(false)) {
+                                        "network_reload"
+                                    } else {
+                                        "page_finished"
+                                    }
+                                    scheduleCustomerDataRefresh(view, trigger)
                                 }
                             }
 
@@ -305,6 +345,7 @@ fun CentralWebView(
                             ) {
                                 super.onReceivedError(view, request, error)
                                 if (request?.isForMainFrame == true) {
+                                    recoveringFromError.set(true)
                                     isError = true
                                     isLoading = false
                                 }
@@ -371,9 +412,104 @@ fun CentralWebView(
     }
 }
 
+private const val CENTRAL_DATA_REFRESH = "CENTRAL_DATA_REFRESH"
+
+/** Delays absolutos a partir do trigger: imediato, +500ms, +1s, +2s. */
+private val CENTRAL_DATA_RETRY_DELAYS_MS = longArrayOf(0L, 500L, 1000L, 2000L)
+
+/**
+ * Reexecuta as capturas já existentes (WhatsApp DOM + perfil storage).
+ * Não duplica o JavaScript de extração.
+ */
+private fun refreshCentralCustomerData(
+    webView: WebView,
+    trigger: String,
+    attempt: Int,
+    onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit,
+    onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit,
+    onAttemptResult: (whatsappFound: Boolean, nameFound: Boolean, codeFound: Boolean) -> Unit
+) {
+    Log.i(CENTRAL_DATA_REFRESH, "trigger=$trigger attempt=$attempt")
+    var whatsappFound = false
+    var nameFound = false
+    var codeFound = false
+    val pending = AtomicInteger(2)
+
+    fun finishOne() {
+        if (pending.decrementAndGet() == 0) {
+            Log.i(
+                CENTRAL_DATA_REFRESH,
+                "trigger=$trigger attempt=$attempt whatsappFound=$whatsappFound nameFound=$nameFound codeFound=$codeFound"
+            )
+            onAttemptResult(whatsappFound, nameFound, codeFound)
+        }
+    }
+
+    extractWhatsAppFromDom(webView, onFound = { number, message, fullUrl, source ->
+        whatsappFound = true
+        onWhatsAppConfigFound(number, message, fullUrl, source)
+    }, onFinished = { finishOne() })
+
+    extractClientProfileFromStorage(webView, onFound = { fullName, code, contract ->
+        if (fullName.isNotBlank()) nameFound = true
+        if (code.isNotBlank()) codeFound = true
+        onClientProfileFound(fullName, code, contract)
+    }, onFinished = { finishOne() })
+}
+
+/**
+ * Até 4 tentativas controladas; cancela agendas anteriores via [generation].
+ * Para quando WhatsApp e (nome ou código) forem encontrados, ou ao esgotar as tentativas.
+ */
+private fun scheduleCentralCustomerDataRefresh(
+    webView: WebView,
+    trigger: String,
+    handler: Handler,
+    generation: AtomicInteger,
+    onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit,
+    onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit,
+    onCycleFinished: (() -> Unit)? = null
+) {
+    val gen = generation.incrementAndGet()
+    val finished = AtomicBoolean(false)
+
+    fun completeOnce() {
+        if (finished.compareAndSet(false, true)) {
+            onCycleFinished?.invoke()
+        }
+    }
+
+    CENTRAL_DATA_RETRY_DELAYS_MS.forEachIndexed { index, delayMs ->
+        handler.postDelayed({
+            if (generation.get() != gen || finished.get()) return@postDelayed
+            if (FcmBridgeController.isAuthBlockedUrl(webView.url)) {
+                // Logout / tela de login no meio do ciclo: não navegar à Home.
+                finished.set(true)
+                return@postDelayed
+            }
+            refreshCentralCustomerData(
+                webView = webView,
+                trigger = trigger,
+                attempt = index + 1,
+                onWhatsAppConfigFound = onWhatsAppConfigFound,
+                onClientProfileFound = onClientProfileFound,
+                onAttemptResult = { wa, name, code ->
+                    if (generation.get() != gen) return@refreshCentralCustomerData
+                    if (wa && (name || code)) {
+                        completeOnce()
+                    } else if (index == CENTRAL_DATA_RETRY_DELAYS_MS.lastIndex) {
+                        completeOnce()
+                    }
+                }
+            )
+        }, delayMs)
+    }
+}
+
 private fun extractWhatsAppFromDom(
     webView: WebView,
-    onFound: (number: String, message: String, fullUrl: String, source: String) -> Unit
+    onFound: (number: String, message: String, fullUrl: String, source: String) -> Unit,
+    onFinished: () -> Unit = {}
 ) {
     val script = """
         (function() {
@@ -402,26 +538,32 @@ private fun extractWhatsAppFromDom(
     """.trimIndent()
 
     webView.evaluateJavascript(script) { raw ->
-        val href = raw
-            ?.trim()
-            ?.removePrefix("\"")
-            ?.removeSuffix("\"")
-            ?.replace("\\u003d", "=")
-            ?.replace("\\u0026", "&")
-            ?.replace("\\/", "/")
-            ?.replace("\\\"", "\"")
-            ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
-            ?: return@evaluateJavascript
+        try {
+            val href = raw
+                ?.trim()
+                ?.removePrefix("\"")
+                ?.removeSuffix("\"")
+                ?.replace("\\u003d", "=")
+                ?.replace("\\u0026", "&")
+                ?.replace("\\/", "/")
+                ?.replace("\\\"", "\"")
+                ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
 
-        WhatsAppSupport.parseFromHref(href)?.let { cfg ->
-            onFound(cfg.number, cfg.message, cfg.fullUrl, "central_dom")
+            if (href != null) {
+                WhatsAppSupport.parseFromHref(href)?.let { cfg ->
+                    onFound(cfg.number, cfg.message, cfg.fullUrl, "central_dom")
+                }
+            }
+        } finally {
+            onFinished()
         }
     }
 }
 
 private fun extractClientProfileFromStorage(
     webView: WebView,
-    onFound: (fullName: String, code: String, contract: String) -> Unit
+    onFound: (fullName: String, code: String, contract: String) -> Unit,
+    onFinished: () -> Unit = {}
 ) {
     // Meus Dados / storage IXC: nome (razao), codigo e contrato quando existirem.
     val script = """
@@ -472,23 +614,27 @@ private fun extractClientProfileFromStorage(
     """.trimIndent()
 
     webView.evaluateJavascript(script) { raw ->
-        val jsonText = raw
-            ?.trim()
-            ?.removePrefix("\"")
-            ?.removeSuffix("\"")
-            ?.replace("\\\"", "\"")
-            ?.replace("\\\\", "\\")
-            ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
-            ?: return@evaluateJavascript
         try {
-            val obj = org.json.JSONObject(jsonText)
-            val nome = obj.optString("nome", "").trim()
-            val codigo = obj.optString("codigo", "").trim()
-            val contrato = obj.optString("contrato", "").trim()
-            if (nome.isBlank() && codigo.isBlank() && contrato.isBlank()) return@evaluateJavascript
-            onFound(nome, codigo, contrato)
-        } catch (_: Exception) {
-            // ignore malformed extract
+            val jsonText = raw
+                ?.trim()
+                ?.removePrefix("\"")
+                ?.removeSuffix("\"")
+                ?.replace("\\\"", "\"")
+                ?.replace("\\\\", "\\")
+                ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
+                ?: return@evaluateJavascript
+            try {
+                val obj = org.json.JSONObject(jsonText)
+                val nome = obj.optString("nome", "").trim()
+                val codigo = obj.optString("codigo", "").trim()
+                val contrato = obj.optString("contrato", "").trim()
+                if (nome.isBlank() && codigo.isBlank() && contrato.isBlank()) return@evaluateJavascript
+                onFound(nome, codigo, contrato)
+            } catch (_: Exception) {
+                // ignore malformed extract
+            }
+        } finally {
+            onFinished()
         }
     }
 }
@@ -504,13 +650,24 @@ class FcmBridgeController {
     private val tokenRequestSeen = AtomicBoolean(false)
     private val updateFirebaseFallbackUsed = AtomicBoolean(false)
     private val fallbackScheduled = AtomicBoolean(false)
+    /** Sessão IXC já observada como autenticada (cookie/storage sessao). */
+    private val hadAuthenticatedSession = AtomicBoolean(false)
+    /** Passou por tela de login/cadastro — próximo ok ⇒ login_authenticated. */
+    private val sawAuthBlockedPath = AtomicBoolean(false)
+    private var onSessionAuthenticated: ((WebView, String) -> Unit)? = null
 
     fun bindWebView(webView: WebView) {
         webViewRef.set(webView)
     }
 
+    fun setOnSessionAuthenticated(listener: (WebView, String) -> Unit) {
+        onSessionAuthenticated = listener
+    }
+
     fun onNavigationStarted(url: String?) {
         if (isAuthBlockedUrl(url)) {
+            sawAuthBlockedPath.set(true)
+            hadAuthenticatedSession.set(false)
             // Never keep bridge visible on login/cadastro/senha screens.
             if (bridgeEnabled.getAndSet(false)) {
                 removeReactNativeShim()
@@ -523,6 +680,8 @@ class FcmBridgeController {
         val wv = webViewRef.get() ?: return
         if (isAuthBlockedUrl(url)) {
             android.util.Log.i("FCM_AUTH_STATE", "blocked_path — bridge not enabled url=$url")
+            sawAuthBlockedPath.set(true)
+            hadAuthenticatedSession.set(false)
             if (bridgeEnabled.getAndSet(false)) {
                 removeReactNativeShim()
             }
@@ -541,9 +700,10 @@ class FcmBridgeController {
     }
 
     private fun evaluateAuthAndMaybeEnable(webView: WebView, url: String?) {
-        if (bridgeEnabled.get()) return
         if (isAuthBlockedUrl(url) || isAuthBlockedUrl(webView.url)) {
             android.util.Log.i("FCM_AUTH_STATE", "skip enable — still on auth-sensitive path")
+            sawAuthBlockedPath.set(true)
+            hadAuthenticatedSession.set(false)
             return
         }
 
@@ -599,9 +759,27 @@ class FcmBridgeController {
                         "FCM_AUTH_STATE",
                         "url=$url ok=$ok reason=$reason hasCookie=${obj.optBoolean("hasCookie")} hasLs=${obj.optBoolean("hasLs")} hasSs=${obj.optBoolean("hasSs")}"
                     )
-                    if (ok) {
-                        enableReactNativePostMessageShim(webView)
+                    if (reason == "blocked_path") {
+                        sawAuthBlockedPath.set(true)
+                        hadAuthenticatedSession.set(false)
+                        return@evaluateJavascript
                     }
+                    if (ok) {
+                        val becameAuthenticated = !hadAuthenticatedSession.getAndSet(true)
+                        if (becameAuthenticated) {
+                            val trigger = if (sawAuthBlockedPath.getAndSet(false)) {
+                                "login_authenticated"
+                            } else {
+                                "session_restored"
+                            }
+                            Log.i(CENTRAL_DATA_REFRESH, "trigger=$trigger")
+                            onSessionAuthenticated?.invoke(webView, trigger)
+                        }
+                        if (!bridgeEnabled.get()) {
+                            enableReactNativePostMessageShim(webView)
+                        }
+                    }
+                    // !ok sem blocked_path: falha temporária — não zera dados nem hadAuthenticatedSession.
                 } catch (e: Exception) {
                     android.util.Log.e("FCM_AUTH_STATE", "parse auth probe failed: $raw", e)
                 }

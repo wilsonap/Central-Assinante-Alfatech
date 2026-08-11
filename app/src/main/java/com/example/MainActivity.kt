@@ -472,6 +472,9 @@ fun AlfatechMainApp(
                 onClientProfileFound = { fullName, code, contract ->
                     viewModel.updateClientProfile(fullName, code, contract)
                 },
+                onPostLoginReady = { trigger ->
+                    viewModel.onPostLoginReady(trigger)
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(0f)

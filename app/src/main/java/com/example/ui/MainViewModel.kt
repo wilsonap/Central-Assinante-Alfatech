@@ -7,7 +7,9 @@ import com.example.data.PushNotificationRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.NotificationEntity
 import com.example.service.FcmTokenStore
+import com.example.ui.components.FcmBridgeController
 import com.google.firebase.messaging.FirebaseMessaging
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -91,6 +93,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
+    /**
+     * Evita loop: Home automática só na transição não autenticado → autenticado,
+     * uma vez por ciclo de sessão. Reset ao voltar para tela de login IXC.
+     */
+    private val postLoginHomeHandled = AtomicBoolean(false)
+
     init {
         retrieveFcmToken()
         refreshReceiptStorageStats()
@@ -98,6 +106,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onUrlChanged(newUrl: String) {
         _currentUrl.value = newUrl
+        if (FcmBridgeController.isAuthBlockedUrl(newUrl)) {
+            if (postLoginHomeHandled.getAndSet(false)) {
+                android.util.Log.i(
+                    "CENTRAL_POST_LOGIN",
+                    "auth_transition=authenticated_to_unauthenticated"
+                )
+            }
+        }
         val authenticatedPaths = listOf(
             "dados_cliente", "faturas", "planos", "consumos",
             "relatorios", "atendimentos", "configuracoes", "principal", "home", "painel", "dashboard"
@@ -105,6 +121,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (authenticatedPaths.any { newUrl.contains(it, ignoreCase = true) }) {
             _isLoggedIn.value = true
         }
+    }
+
+    /**
+     * Após auth confirmada + refreshCentralCustomerData (ciclo #40).
+     * Navega à Home nativa uma vez por sessão autenticada.
+     */
+    fun onPostLoginReady(trigger: String) {
+        val authType = when (trigger) {
+            "login_authenticated" -> "manual"
+            "session_restored" -> "automatic"
+            else -> trigger
+        }
+        android.util.Log.i("CENTRAL_POST_LOGIN", "auth_type=$authType")
+        if (!postLoginHomeHandled.compareAndSet(false, true)) {
+            android.util.Log.i("CENTRAL_POST_LOGIN", "navigate_skipped=already_handled")
+            return
+        }
+        _isLoggedIn.value = true
+        android.util.Log.i("CENTRAL_POST_LOGIN", "navigate_to_home=true")
+        navigateToHome()
     }
 
     fun updateWhatsAppConfig(number: String, message: String, fullUrl: String, source: String) {
