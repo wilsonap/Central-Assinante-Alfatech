@@ -2,12 +2,11 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
+import android.widget.ImageView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +42,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,28 +51,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.example.receipt.ReceiptImageStamper
+import com.example.receipt.ReceiptHistoryStore
 import com.example.receipt.ReceiptShareHelper
 import com.example.ui.WhatsAppSupport
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-private const val TAG = "RECEIPT_SEND"
+private const val URI_LOG = "RECEIPT_SHARE"
 
+/**
+ * Fluxo: selectedUri → preview → EXTRA_STREAM (mesma URI).
+ * Após iniciar o share, arquiva cópia local no histórico.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReceiptSenderScreen(
     clientFullName: String,
+    clientCode: String,
+    clientContract: String,
     supportWhatsAppNumber: String,
     onClose: () -> Unit
 ) {
@@ -82,48 +82,38 @@ fun ReceiptSenderScreen(
     val scope = rememberCoroutineScope()
 
     var step by remember { mutableStateOf(ReceiptStep.Pick) }
-    var previewUri by remember { mutableStateOf<Uri?>(null) }
-    var previewMime by remember { mutableStateOf("image/jpeg") }
+    var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedMime by remember { mutableStateOf("image/*") }
     var isPdf by remember { mutableStateOf(false) }
-    var processing by remember { mutableStateOf(false) }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
 
-    fun openPreview(uri: Uri, mime: String, pdf: Boolean) {
-        if (pdf) {
-            previewUri = uri
-            previewMime = "application/pdf"
-            isPdf = true
-            step = ReceiptStep.Preview
-            return
+    fun bindSelected(uri: Uri, mime: String, pdf: Boolean) {
+        selectedUri = uri
+        isPdf = pdf
+        selectedMime = if (pdf) {
+            "application/pdf"
+        } else {
+            ReceiptShareHelper.resolveMime(context, uri, mime)
         }
-        processing = true
-        scope.launch {
-            val stamped = withContext(Dispatchers.IO) {
-                ReceiptImageStamper.stampCopy(context, uri, clientFullName)
-            }
-            processing = false
-            if (stamped != null) {
-                previewUri = stamped
-                previewMime = "image/jpeg"
-                isPdf = false
-                step = ReceiptStep.Preview
-            } else {
-                Log.w(TAG, "preview prepare failed")
-            }
-        }
+        val originalId = ReceiptShareHelper.uriTraceId(uri)
+        val previewId = ReceiptShareHelper.uriTraceId(uri)
+        Log.i(URI_LOG, "RECEIPT_ORIGINAL_URI id=$originalId")
+        Log.i(URI_LOG, "RECEIPT_PREVIEW_URI id=$previewId")
+        Log.i(URI_LOG, "sameOriginalPreview=${originalId == previewId}")
+        step = ReceiptStep.Preview
     }
 
     val takePicture = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { ok ->
         val uri = cameraUri
-        if (ok && uri != null) openPreview(uri, "image/jpeg", pdf = false)
+        if (ok && uri != null) bindSelected(uri, "image/jpeg", pdf = false)
     }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) openPreview(uri, "image/*", pdf = false)
+        if (uri != null) bindSelected(uri, "image/*", pdf = false)
     }
 
     val pickPdf = rememberLauncherForActivityResult(
@@ -136,7 +126,7 @@ fun ReceiptSenderScreen(
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             }
-            openPreview(uri, "application/pdf", pdf = true)
+            bindSelected(uri, "application/pdf", pdf = true)
         }
     }
 
@@ -144,9 +134,9 @@ fun ReceiptSenderScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            val pair = ReceiptImageStamper.createCameraTarget(context)
-            cameraUri = pair.second
-            takePicture.launch(pair.second)
+            val uri = ReceiptShareHelper.createCameraCaptureUri(context)
+            cameraUri = uri
+            takePicture.launch(uri)
         }
     }
 
@@ -156,9 +146,9 @@ fun ReceiptSenderScreen(
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) {
-            val pair = ReceiptImageStamper.createCameraTarget(context)
-            cameraUri = pair.second
-            takePicture.launch(pair.second)
+            val uri = ReceiptShareHelper.createCameraCaptureUri(context)
+            cameraUri = uri
+            takePicture.launch(uri)
         } else {
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
@@ -176,7 +166,7 @@ fun ReceiptSenderScreen(
                     IconButton(onClick = {
                         if (step == ReceiptStep.Preview) {
                             step = ReceiptStep.Pick
-                            previewUri = null
+                            selectedUri = null
                         } else {
                             onClose()
                         }
@@ -200,39 +190,62 @@ fun ReceiptSenderScreen(
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp),
-                processing = processing,
                 onCamera = { launchCamera() },
                 onGallery = { pickImage.launch("image/*") },
                 onPdf = { pickPdf.launch(arrayOf("application/pdf")) }
             )
 
             ReceiptStep.Preview -> {
-                val message = ReceiptShareHelper.buildMessage(clientFullName)
+                val message = ReceiptShareHelper.buildMessage(
+                    fullName = clientFullName,
+                    clientCode = clientCode,
+                    contract = clientContract
+                )
+                val uri = selectedUri
                 PreviewPane(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
                         .padding(16.dp),
-                    previewUri = previewUri,
+                    selectedUri = uri,
                     isPdf = isPdf,
                     clientFullName = clientFullName,
+                    clientCode = clientCode,
+                    clientContract = clientContract,
                     supportMasked = WhatsAppSupport.maskNumber(
                         ReceiptShareHelper.normalizePhone(supportWhatsAppNumber)
                     ),
                     onChooseAnother = {
                         step = ReceiptStep.Pick
-                        previewUri = null
+                        selectedUri = null
                     },
                     onCancel = onClose,
                     onSendFile = {
-                        val uri = previewUri ?: return@PreviewPane
-                        ReceiptShareHelper.shareFileToWhatsApp(
+                        if (uri == null) return@PreviewPane
+                        val originalId = ReceiptShareHelper.uriTraceId(uri)
+                        val shareId = ReceiptShareHelper.uriTraceId(uri)
+                        Log.i(URI_LOG, "RECEIPT_ORIGINAL_URI id=$originalId")
+                        Log.i(URI_LOG, "RECEIPT_SHARE_URI id=$shareId")
+                        Log.i(URI_LOG, "sameOriginalShare=${originalId == shareId}")
+                        val started = ReceiptShareHelper.shareFileToWhatsApp(
                             context = context,
-                            fileUri = uri,
-                            mimeType = previewMime,
+                            selectedUri = uri,
+                            mimeType = selectedMime,
                             phoneDigits = supportWhatsAppNumber,
                             message = message
                         )
+                        if (started) {
+                            scope.launch {
+                                ReceiptHistoryStore.archiveAfterShareStarted(
+                                    context = context,
+                                    sourceUri = uri,
+                                    mimeType = selectedMime,
+                                    clientName = clientFullName,
+                                    clientCode = clientCode,
+                                    clientContract = clientContract
+                                )
+                            }
+                        }
                     },
                     onOpenChat = {
                         ReceiptShareHelper.openAlfatechChat(
@@ -252,7 +265,6 @@ private enum class ReceiptStep { Pick, Preview }
 @Composable
 private fun PickOptions(
     modifier: Modifier,
-    processing: Boolean,
     onCamera: () -> Unit,
     onGallery: () -> Unit,
     onPdf: () -> Unit
@@ -266,17 +278,13 @@ private fun PickOptions(
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (processing) {
-            Text("Preparando imagem…", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-        }
         OptionCard(
             title = "Tirar foto",
             subtitle = "Usar a câmera do aparelho",
             icon = Icons.Default.CameraAlt,
             tint = Color(0xFF1A56DB),
             bg = Color(0xFFEBF2FE),
-            onClick = onCamera,
-            enabled = !processing
+            onClick = onCamera
         )
         OptionCard(
             title = "Escolher imagem",
@@ -284,8 +292,7 @@ private fun PickOptions(
             icon = Icons.Default.Image,
             tint = Color(0xFF059669),
             bg = Color(0xFFECFDF5),
-            onClick = onGallery,
-            enabled = !processing
+            onClick = onGallery
         )
         OptionCard(
             title = "Escolher PDF",
@@ -293,8 +300,7 @@ private fun PickOptions(
             icon = Icons.Default.PictureAsPdf,
             tint = Color(0xFFDC2626),
             bg = Color(0xFFFEE2E2),
-            onClick = onPdf,
-            enabled = !processing
+            onClick = onPdf
         )
     }
 }
@@ -306,13 +312,12 @@ private fun OptionCard(
     icon: ImageVector,
     tint: Color,
     bg: Color,
-    onClick: () -> Unit,
-    enabled: Boolean
+    onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -342,9 +347,11 @@ private fun OptionCard(
 @Composable
 private fun PreviewPane(
     modifier: Modifier,
-    previewUri: Uri?,
+    selectedUri: Uri?,
     isPdf: Boolean,
     clientFullName: String,
+    clientCode: String,
+    clientContract: String,
     supportMasked: String,
     onChooseAnother: () -> Unit,
     onCancel: () -> Unit,
@@ -356,7 +363,7 @@ private fun PreviewPane(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "Confira o arquivo e os dados antes de enviar.",
+            text = "Confira o arquivo original e os dados da mensagem antes de enviar.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -378,31 +385,31 @@ private fun PreviewPane(
                         Spacer(modifier = Modifier.width(12.dp))
                         Text("PDF selecionado (original, sem alteração)", fontWeight = FontWeight.SemiBold)
                     }
-                } else if (previewUri != null) {
-                    var bitmap by remember(previewUri) { mutableStateOf<ImageBitmap?>(null) }
-                    val ctx = LocalContext.current
-                    LaunchedEffect(previewUri) {
-                        bitmap = withContext(Dispatchers.IO) {
-                            ctx.contentResolver.openInputStream(previewUri)?.use { input ->
-                                BitmapFactory.decodeStream(input)?.asImageBitmap()
+                } else if (selectedUri != null) {
+                    // Prévia visual via ImageView.setImageURI — sem Canvas/stamp/arquivo novo.
+                    AndroidView(
+                        factory = { ctx ->
+                            ImageView(ctx).apply {
+                                adjustViewBounds = true
+                                scaleType = ImageView.ScaleType.FIT_CENTER
+                                setImageURI(selectedUri)
                             }
-                        }
-                    }
-                    bitmap?.let { bmp ->
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = "Prévia do comprovante",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(280.dp)
-                                .clip(RoundedCornerShape(12.dp)),
-                            contentScale = ContentScale.Fit
-                        )
-                    }
+                        },
+                        update = { view -> view.setImageURI(selectedUri) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Dados incluídos", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Dados na mensagem do WhatsApp", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    text = "Esses dados vão no texto da mensagem — não são impressos no comprovante.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(modifier = Modifier.height(6.dp))
                 if (clientFullName.isNotBlank()) {
                     Text("Cliente: $clientFullName", fontSize = 13.sp)
@@ -413,6 +420,12 @@ private fun PreviewPane(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                if (clientCode.isNotBlank()) {
+                    Text("Código: $clientCode", fontSize = 13.sp)
+                }
+                if (clientContract.isNotBlank()) {
+                    Text("Contrato: $clientContract", fontSize = 13.sp)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "Destino: WhatsApp da Alfatech ($supportMasked)",
@@ -422,22 +435,16 @@ private fun PreviewPane(
             }
         }
 
-        Text(
-            text = "Seu comprovante está pronto. Escolha a melhor opção para o seu envio:",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
         Button(
             onClick = onSendFile,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
         ) {
-            Text("1. Enviar comprovante anexado (Recomendado)", fontWeight = FontWeight.Bold)
+            Text("Enviar pelo WhatsApp", fontWeight = FontWeight.Bold)
         }
         Text(
-            text = "Abre o WhatsApp com o arquivo anexado e a mensagem pronta. Basta selecionar Alfatech na lista e enviar.",
+            text = "O arquivo original e os dados do comprovante serão compartilhados.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -447,10 +454,10 @@ private fun PreviewPane(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text("2. Abrir conversa da Alfatech (Contato não salvo)")
+            Text("Abrir conversa da Alfatech")
         }
         Text(
-            text = "Abre a conversa direta com o suporte da Alfatech imediatamente (mesmo se não estiver salvo na sua agenda). Anexe o comprovante pelo ícone de clipe 📎 no WhatsApp.",
+            text = "Abre diretamente o atendimento da Alfatech. O comprovante deverá ser anexado manualmente.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

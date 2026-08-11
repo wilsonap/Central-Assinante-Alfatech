@@ -43,7 +43,7 @@ fun NotificationsScreen(
     notifications: List<NotificationEntity>,
     onClearAll: () -> Unit
 ) {
-    val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("pt", "BR"))
+    val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.forLanguageTag("pt-BR"))
 
     Column(
         modifier = Modifier

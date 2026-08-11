@@ -21,6 +21,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
     private val notificationDao = db.notificationDao()
+    private val receiptHistoryDao = db.receiptHistoryDao()
 
     val notifications: StateFlow<List<NotificationEntity>> = notificationDao.getAllNotifications()
         .stateIn(
@@ -28,6 +29,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    val receiptHistory: StateFlow<List<com.example.data.local.ReceiptHistoryEntity>> =
+        receiptHistoryDao.observeAll()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
+    private val _receiptStorageCount = MutableStateFlow(0)
+    val receiptStorageCount: StateFlow<Int> = _receiptStorageCount.asStateFlow()
+
+    private val _receiptStorageBytes = MutableStateFlow(0L)
+    val receiptStorageBytes: StateFlow<Long> = _receiptStorageBytes.asStateFlow()
 
     private val _fcmToken = MutableStateFlow(FcmTokenStore.current(application))
     val fcmToken: StateFlow<String> = _fcmToken.asStateFlow()
@@ -44,8 +59,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _clientFullName = MutableStateFlow("")
     val clientFullName: StateFlow<String> = _clientFullName.asStateFlow()
 
+    private val _clientCode = MutableStateFlow("")
+    val clientCode: StateFlow<String> = _clientCode.asStateFlow()
+
+    private val _clientContract = MutableStateFlow("")
+    val clientContract: StateFlow<String> = _clientContract.asStateFlow()
+
     private val _showReceiptSender = MutableStateFlow(false)
     val showReceiptSender: StateFlow<Boolean> = _showReceiptSender.asStateFlow()
+
+    private val _showReceiptHistory = MutableStateFlow(false)
+    val showReceiptHistory: StateFlow<Boolean> = _showReceiptHistory.asStateFlow()
+
 
     // 0 = Home Screen (Native), 1 = WebView Screen
     private val _currentScreen = MutableStateFlow(1)
@@ -68,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         retrieveFcmToken()
+        refreshReceiptStorageStats()
     }
 
     fun onUrlChanged(newUrl: String) {
@@ -105,12 +131,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         android.util.Log.i("RECEIPT_SEND", "clientFullName captured=true")
     }
 
+    fun updateClientProfile(fullName: String, code: String, contract: String) {
+        val name = fullName.trim()
+        val codigo = code.trim()
+        val contrato = contract.trim()
+        if (name.isNotBlank()) _clientFullName.value = name
+        if (codigo.isNotBlank()) _clientCode.value = codigo
+        if (contrato.isNotBlank()) _clientContract.value = contrato
+        if (name.isNotBlank() || codigo.isNotBlank() || contrato.isNotBlank()) {
+            android.util.Log.i(
+                "RECEIPT_SEND",
+                "clientProfile name=${name.isNotBlank()} code=${codigo.isNotBlank()} contract=${contrato.isNotBlank()}"
+            )
+        }
+    }
+
     fun openReceiptSender() {
         _showReceiptSender.value = true
     }
 
     fun closeReceiptSender() {
         _showReceiptSender.value = false
+    }
+
+    fun openReceiptHistory() {
+        refreshReceiptStorageStats()
+        _showReceiptHistory.value = true
+    }
+
+    fun closeReceiptHistory() {
+        _showReceiptHistory.value = false
+    }
+
+    fun refreshReceiptStorageStats() {
+        viewModelScope.launch {
+            val (count, bytes) = com.example.receipt.ReceiptHistoryStore.storageStats(getApplication())
+            _receiptStorageCount.value = count
+            _receiptStorageBytes.value = bytes
+        }
     }
 
     fun selectBottomTab(tabIndex: Int) {

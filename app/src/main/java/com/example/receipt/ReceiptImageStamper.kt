@@ -113,7 +113,7 @@ object ReceiptImageStamper {
     }
 
     private fun buildFooterLines(fullName: String): List<String> {
-        val whenStr = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("pt", "BR")).format(Date())
+        val whenStr = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.forLanguageTag("pt-BR")).format(Date())
         return buildList {
             add("Alfatech Telecom")
             if (fullName.isNotBlank()) add("Cliente: ${fullName.trim()}")

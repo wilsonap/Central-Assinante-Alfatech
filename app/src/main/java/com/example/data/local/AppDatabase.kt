@@ -6,12 +6,13 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [NotificationEntity::class],
-    version = 2,
+    entities = [NotificationEntity::class, ReceiptHistoryEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun notificationDao(): NotificationDao
+    abstract fun receiptHistoryDao(): ReceiptHistoryDao
 
     companion object {
         @Volatile
@@ -24,15 +25,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "alfatech_database"
                 )
-                    .addMigrations(MIGRATION_1_2)
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                 INSTANCE = instance
                 instance
             }
         }
 
-        /** Expõe a instância singleton para testes; preferir [getDatabase] em produção. */
         fun clearInstanceForTests() {
             synchronized(this) {
                 INSTANCE?.close()

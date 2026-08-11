@@ -19,11 +19,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Receipt
@@ -58,7 +59,8 @@ data class CentralShortcut(
 fun HomeScreen(
     onNavigateToUrl: (urlPath: String, title: String) -> Unit,
     onWhatsAppClick: () -> Unit = {},
-    onReceiptClick: () -> Unit = {}
+    onReceiptClick: () -> Unit = {},
+    onReceiptHistoryClick: () -> Unit = {}
 ) {
     val shortcuts = listOf(
         CentralShortcut(
@@ -78,10 +80,10 @@ fun HomeScreen(
             iconBackground = Color(0xFFCCFBF1)
         ),
         CentralShortcut(
-            title = "Contratos / Planos",
-            subtitle = "Planos e termos do contrato",
-            urlPath = "planos",
-            icon = Icons.Default.Description,
+            title = "Comprovantes",
+            subtitle = "Veja e reenvie comprovantes anteriores",
+            urlPath = "__receipt_history__",
+            icon = Icons.Default.History,
             iconTint = Color(0xFF059669),
             iconBackground = Color(0xFFECFDF5)
         ),
@@ -105,7 +107,7 @@ fun HomeScreen(
             title = "Chamar no WhatsApp",
             subtitle = "Atendimento pelo WhatsApp da Central",
             urlPath = "__whatsapp__",
-            icon = Icons.Default.Chat,
+            icon = Icons.AutoMirrored.Filled.Chat,
             iconTint = Color(0xFF25D366),
             iconBackground = Color(0xFFE8F8EF)
         ),
@@ -121,7 +123,7 @@ fun HomeScreen(
             title = "Relatórios",
             subtitle = "Extratos e histórico da conta",
             urlPath = "relatorios",
-            icon = Icons.Default.Assignment,
+            icon = Icons.AutoMirrored.Filled.Assignment,
             iconTint = Color(0xFF0891B2),
             iconBackground = Color(0xFFCFFAFE)
         ),
@@ -253,6 +255,7 @@ fun HomeScreen(
                         when (shortcut.urlPath) {
                             "__whatsapp__" -> onWhatsAppClick()
                             "__receipt__" -> onReceiptClick()
+                            "__receipt_history__" -> onReceiptHistoryClick()
                             else -> onNavigateToUrl(shortcut.urlPath, shortcut.title)
                         }
                     },

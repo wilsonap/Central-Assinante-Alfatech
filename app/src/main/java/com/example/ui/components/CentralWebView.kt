@@ -71,7 +71,7 @@ fun CentralWebView(
     onTitleChanged: (String) -> Unit = {},
     onUrlChanged: (String) -> Unit = {},
     onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit = { _, _, _, _ -> },
-    onClientFullNameFound: (fullName: String) -> Unit = {}
+    onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit = { _, _, _ -> }
 ) {
     // fcmToken Compose param retained for call-site compatibility; never frozen into the bridge.
     @Suppress("UNUSED_PARAMETER")
@@ -172,7 +172,7 @@ fun CentralWebView(
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
-                            databaseEnabled = true
+                            // databaseEnabled (WebSQL) removido: Central usa localStorage/sessionStorage via DOM Storage.
                             allowFileAccess = true
                             allowContentAccess = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -294,7 +294,7 @@ fun CentralWebView(
                                 // Capture WhatsApp number from Central DOM after authenticated pages load.
                                 if (view != null && !FcmBridgeController.isAuthBlockedUrl(url)) {
                                     extractWhatsAppFromDom(view, onWhatsAppConfigFound)
-                                    extractClientFullNameFromStorage(view, onClientFullNameFound)
+                                    extractClientProfileFromStorage(view, onClientProfileFound)
                                 }
                             }
 
@@ -419,11 +419,11 @@ private fun extractWhatsAppFromDom(
     }
 }
 
-private fun extractClientFullNameFromStorage(
+private fun extractClientProfileFromStorage(
     webView: WebView,
-    onFound: (fullName: String) -> Unit
+    onFound: (fullName: String, code: String, contract: String) -> Unit
 ) {
-    // Meus Dados: "Nome completo" → tipicamente dados.razao na Central IXC.
+    // Meus Dados / storage IXC: nome (razao), codigo e contrato quando existirem.
     val script = """
         (function() {
           try {
@@ -434,20 +434,45 @@ private fun extractClientFullNameFromStorage(
                 return JSON.parse(raw);
               } catch (e) { return null; }
             }
-            var dados = parseStore('dados');
-            var nome = '';
-            if (dados) {
-              nome = String(dados.razao || dados.nome_completo || dados.nome || dados.fantasia || '').trim();
+            function pick() {
+              for (var i = 0; i < arguments.length; i++) {
+                var v = arguments[i];
+                if (v !== undefined && v !== null) {
+                  var s = String(v).trim();
+                  if (s && s !== 'null' && s !== 'undefined') return s;
+                }
+              }
+              return '';
             }
-            return nome || '';
+            var dados = parseStore('dados') || {};
+            var cliente = parseStore('cliente') || {};
+            var contratoObj = parseStore('contrato') || parseStore('contratos') || {};
+            var nome = pick(
+              dados.razao, dados.nome_completo, dados.nome, dados.fantasia,
+              cliente.razao, cliente.nome_completo, cliente.nome
+            );
+            var codigo = pick(
+              dados.codigo_cliente, dados.codigo, dados.id_cliente, dados.id,
+              cliente.codigo_cliente, cliente.codigo, cliente.id_cliente, cliente.id
+            );
+            var contrato = pick(
+              dados.contrato, dados.id_contrato, dados.codigo_contrato,
+              cliente.contrato, cliente.id_contrato,
+              contratoObj.contrato, contratoObj.id, contratoObj.codigo, contratoObj.id_contrato
+            );
+            if (Array.isArray(contratoObj) && contratoObj.length > 0) {
+              var c0 = contratoObj[0] || {};
+              if (!contrato) contrato = pick(c0.contrato, c0.id, c0.codigo, c0.id_contrato);
+            }
+            return JSON.stringify({ nome: nome, codigo: codigo, contrato: contrato });
           } catch (e) {
-            return '';
+            return JSON.stringify({ nome: '', codigo: '', contrato: '' });
           }
         })();
     """.trimIndent()
 
     webView.evaluateJavascript(script) { raw ->
-        val name = raw
+        val jsonText = raw
             ?.trim()
             ?.removePrefix("\"")
             ?.removeSuffix("\"")
@@ -455,7 +480,16 @@ private fun extractClientFullNameFromStorage(
             ?.replace("\\\\", "\\")
             ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
             ?: return@evaluateJavascript
-        onFound(name)
+        try {
+            val obj = org.json.JSONObject(jsonText)
+            val nome = obj.optString("nome", "").trim()
+            val codigo = obj.optString("codigo", "").trim()
+            val contrato = obj.optString("contrato", "").trim()
+            if (nome.isBlank() && codigo.isBlank() && contrato.isBlank()) return@evaluateJavascript
+            onFound(nome, codigo, contrato)
+        } catch (_: Exception) {
+            // ignore malformed extract
+        }
     }
 }
 

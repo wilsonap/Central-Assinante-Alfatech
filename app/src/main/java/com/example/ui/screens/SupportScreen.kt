@@ -16,8 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Router
@@ -64,7 +64,7 @@ fun SupportScreen() {
             SupportContactCard(
                 title = "Atendimento via WhatsApp",
                 subtitle = "Fale diretamente com nossa equipe de suporte técnico",
-                icon = Icons.Default.Chat,
+                icon = Icons.AutoMirrored.Filled.Chat,
                 onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/5508000000000"))

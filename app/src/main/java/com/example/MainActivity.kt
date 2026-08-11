@@ -134,6 +134,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleCentralOrSystemBack() {
+        if (viewModel.showReceiptHistory.value) {
+            Log.i("CENTRAL_NAV", "Back action=closeReceiptHistory")
+            viewModel.closeReceiptHistory()
+            return
+        }
         if (viewModel.showReceiptSender.value) {
             Log.i("CENTRAL_NAV", "Back action=closeReceiptSender")
             viewModel.closeReceiptSender()
@@ -232,7 +237,13 @@ fun AlfatechMainApp(
     val currentTitle by viewModel.currentTitle.collectAsState()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
     val showReceiptSender by viewModel.showReceiptSender.collectAsState()
+    val showReceiptHistory by viewModel.showReceiptHistory.collectAsState()
+    val receiptHistory by viewModel.receiptHistory.collectAsState()
+    val receiptStorageCount by viewModel.receiptStorageCount.collectAsState()
+    val receiptStorageBytes by viewModel.receiptStorageBytes.collectAsState()
     val clientFullName by viewModel.clientFullName.collectAsState()
+    val clientCode by viewModel.clientCode.collectAsState()
+    val clientContract by viewModel.clientContract.collectAsState()
     val supportWhatsAppNumber by viewModel.supportWhatsAppNumber.collectAsState()
 
     var showNotificationsSheet by remember { mutableStateOf(false) }
@@ -458,8 +469,8 @@ fun AlfatechMainApp(
                 onWhatsAppConfigFound = { number, message, fullUrl, source ->
                     viewModel.updateWhatsAppConfig(number, message, fullUrl, source)
                 },
-                onClientFullNameFound = { fullName ->
-                    viewModel.updateClientFullName(fullName)
+                onClientProfileFound = { fullName, code, contract ->
+                    viewModel.updateClientProfile(fullName, code, contract)
                 },
                 modifier = Modifier
                     .fillMaxSize()
@@ -467,7 +478,7 @@ fun AlfatechMainApp(
             )
 
             // Render Native Home Screen on top when currentScreen == 0
-            if (currentScreen == 0 && !showReceiptSender) {
+            if (currentScreen == 0 && !showReceiptSender && !showReceiptHistory) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -486,7 +497,8 @@ fun AlfatechMainApp(
                                 fullUrl = viewModel.supportWhatsAppUrl.value
                             )
                         },
-                        onReceiptClick = { viewModel.openReceiptSender() }
+                        onReceiptClick = { viewModel.openReceiptSender() },
+                        onReceiptHistoryClick = { viewModel.openReceiptHistory() }
                     )
                 }
             }
@@ -500,8 +512,28 @@ fun AlfatechMainApp(
                 ) {
                     ReceiptSenderScreen(
                         clientFullName = clientFullName,
+                        clientCode = clientCode,
+                        clientContract = clientContract,
                         supportWhatsAppNumber = supportWhatsAppNumber,
                         onClose = { viewModel.closeReceiptSender() }
+                    )
+                }
+            }
+
+            if (showReceiptHistory) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    com.example.ui.screens.ReceiptHistoryScreen(
+                        receipts = receiptHistory,
+                        supportWhatsAppNumber = supportWhatsAppNumber,
+                        storageCount = receiptStorageCount,
+                        storageBytes = receiptStorageBytes,
+                        onClose = { viewModel.closeReceiptHistory() },
+                        onDeleted = { viewModel.refreshReceiptStorageStats() }
                     )
                 }
             }
