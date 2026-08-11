@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.service.FcmTokenStore
+import com.example.ui.WhatsAppSupport
 import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
@@ -68,7 +69,9 @@ fun CentralWebView(
     isVisible: Boolean = true,
     onWebViewCreated: (WebView) -> Unit = {},
     onTitleChanged: (String) -> Unit = {},
-    onUrlChanged: (String) -> Unit = {}
+    onUrlChanged: (String) -> Unit = {},
+    onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit = { _, _, _, _ -> },
+    onClientFullNameFound: (fullName: String) -> Unit = {}
 ) {
     // fcmToken Compose param retained for call-site compatibility; never frozen into the bridge.
     @Suppress("UNUSED_PARAMETER")
@@ -213,9 +216,22 @@ fun CentralWebView(
                                 request: WebResourceRequest?
                             ): Boolean {
                                 val reqUrl = request?.url?.toString() ?: return false
-                                if (reqUrl.startsWith("whatsapp://") || reqUrl.contains("wa.me/") ||
+                                val isWhatsApp = reqUrl.startsWith("whatsapp://") ||
+                                    reqUrl.contains("wa.me/") ||
+                                    reqUrl.contains("api.whatsapp.com/send")
+                                if (isWhatsApp ||
                                     reqUrl.startsWith("tel:") || reqUrl.startsWith("mailto:")
                                 ) {
+                                    if (isWhatsApp) {
+                                        WhatsAppSupport.parseFromHref(reqUrl)?.let { cfg ->
+                                            onWhatsAppConfigFound(
+                                                cfg.number,
+                                                cfg.message,
+                                                cfg.fullUrl,
+                                                "central_navigation"
+                                            )
+                                        }
+                                    }
                                     try {
                                         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(reqUrl)))
                                     } catch (_: Exception) {
@@ -274,6 +290,11 @@ fun CentralWebView(
                                     if (t.isNotBlank() && !t.startsWith("http")) {
                                         onTitleChanged(t)
                                     }
+                                }
+                                // Capture WhatsApp number from Central DOM after authenticated pages load.
+                                if (view != null && !FcmBridgeController.isAuthBlockedUrl(url)) {
+                                    extractWhatsAppFromDom(view, onWhatsAppConfigFound)
+                                    extractClientFullNameFromStorage(view, onClientFullNameFound)
                                 }
                             }
 
@@ -347,6 +368,94 @@ fun CentralWebView(
                 )
             }
         }
+    }
+}
+
+private fun extractWhatsAppFromDom(
+    webView: WebView,
+    onFound: (number: String, message: String, fullUrl: String, source: String) -> Unit
+) {
+    val script = """
+        (function() {
+          try {
+            function pickHref() {
+              var preferred = document.querySelector(
+                'a[href*="api.whatsapp.com/send?phone="],a[href*="api.whatsapp.com/send/?phone="]'
+              );
+              if (preferred && preferred.href) return preferred.href;
+              var fallback = document.querySelector('a[href*="wa.me/"]');
+              if (fallback && fallback.href) return fallback.href;
+              var links = document.getElementsByTagName('a');
+              for (var i = 0; i < links.length; i++) {
+                var h = links[i].href || '';
+                if (h.indexOf('api.whatsapp.com/send') >= 0 || h.indexOf('wa.me/') >= 0) {
+                  return h;
+                }
+              }
+              return '';
+            }
+            return pickHref();
+          } catch (e) {
+            return '';
+          }
+        })();
+    """.trimIndent()
+
+    webView.evaluateJavascript(script) { raw ->
+        val href = raw
+            ?.trim()
+            ?.removePrefix("\"")
+            ?.removeSuffix("\"")
+            ?.replace("\\u003d", "=")
+            ?.replace("\\u0026", "&")
+            ?.replace("\\/", "/")
+            ?.replace("\\\"", "\"")
+            ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
+            ?: return@evaluateJavascript
+
+        WhatsAppSupport.parseFromHref(href)?.let { cfg ->
+            onFound(cfg.number, cfg.message, cfg.fullUrl, "central_dom")
+        }
+    }
+}
+
+private fun extractClientFullNameFromStorage(
+    webView: WebView,
+    onFound: (fullName: String) -> Unit
+) {
+    // Meus Dados: "Nome completo" → tipicamente dados.razao na Central IXC.
+    val script = """
+        (function() {
+          try {
+            function parseStore(key) {
+              try {
+                var raw = localStorage.getItem(key) || sessionStorage.getItem(key);
+                if (!raw) return null;
+                return JSON.parse(raw);
+              } catch (e) { return null; }
+            }
+            var dados = parseStore('dados');
+            var nome = '';
+            if (dados) {
+              nome = String(dados.razao || dados.nome_completo || dados.nome || dados.fantasia || '').trim();
+            }
+            return nome || '';
+          } catch (e) {
+            return '';
+          }
+        })();
+    """.trimIndent()
+
+    webView.evaluateJavascript(script) { raw ->
+        val name = raw
+            ?.trim()
+            ?.removePrefix("\"")
+            ?.removeSuffix("\"")
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+            ?.takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
+            ?: return@evaluateJavascript
+        onFound(name)
     }
 }
 

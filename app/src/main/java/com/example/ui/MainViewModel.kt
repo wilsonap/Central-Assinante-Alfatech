@@ -32,6 +32,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _fcmToken = MutableStateFlow(FcmTokenStore.current(application))
     val fcmToken: StateFlow<String> = _fcmToken.asStateFlow()
 
+    private val _supportWhatsAppNumber = MutableStateFlow("")
+    val supportWhatsAppNumber: StateFlow<String> = _supportWhatsAppNumber.asStateFlow()
+
+    private val _supportWhatsAppMessage = MutableStateFlow(WhatsAppSupport.DEFAULT_MESSAGE)
+    val supportWhatsAppMessage: StateFlow<String> = _supportWhatsAppMessage.asStateFlow()
+
+    private val _supportWhatsAppUrl = MutableStateFlow("")
+    val supportWhatsAppUrl: StateFlow<String> = _supportWhatsAppUrl.asStateFlow()
+
+    private val _clientFullName = MutableStateFlow("")
+    val clientFullName: StateFlow<String> = _clientFullName.asStateFlow()
+
+    private val _showReceiptSender = MutableStateFlow(false)
+    val showReceiptSender: StateFlow<Boolean> = _showReceiptSender.asStateFlow()
+
     // 0 = Home Screen (Native), 1 = WebView Screen
     private val _currentScreen = MutableStateFlow(1)
     val currentScreen: StateFlow<Int> = _currentScreen.asStateFlow()
@@ -64,6 +79,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (authenticatedPaths.any { newUrl.contains(it, ignoreCase = true) }) {
             _isLoggedIn.value = true
         }
+    }
+
+    fun updateWhatsAppConfig(number: String, message: String, fullUrl: String, source: String) {
+        val digits = number.filter { it.isDigit() }
+        if (digits.isEmpty() && fullUrl.isBlank()) return
+        if (digits.isNotEmpty()) {
+            _supportWhatsAppNumber.value = digits
+        }
+        if (message.isNotBlank()) {
+            _supportWhatsAppMessage.value = message
+        }
+        if (fullUrl.isNotBlank()) {
+            _supportWhatsAppUrl.value = fullUrl
+        }
+        if (digits.isNotEmpty()) {
+            WhatsAppSupport.logCaptured(digits, source)
+        }
+    }
+
+    fun updateClientFullName(fullName: String) {
+        val name = fullName.trim()
+        if (name.isBlank()) return
+        _clientFullName.value = name
+        android.util.Log.i("RECEIPT_SEND", "clientFullName captured=true")
+    }
+
+    fun openReceiptSender() {
+        _showReceiptSender.value = true
+    }
+
+    fun closeReceiptSender() {
+        _showReceiptSender.value = false
     }
 
     fun selectBottomTab(tabIndex: Int) {

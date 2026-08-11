@@ -21,11 +21,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -54,7 +56,9 @@ data class CentralShortcut(
 
 @Composable
 fun HomeScreen(
-    onNavigateToUrl: (urlPath: String, title: String) -> Unit
+    onNavigateToUrl: (urlPath: String, title: String) -> Unit,
+    onWhatsAppClick: () -> Unit = {},
+    onReceiptClick: () -> Unit = {}
 ) {
     val shortcuts = listOf(
         CentralShortcut(
@@ -64,6 +68,14 @@ fun HomeScreen(
             icon = Icons.Default.Receipt,
             iconTint = Color(0xFF1A56DB),
             iconBackground = Color(0xFFEBF2FE)
+        ),
+        CentralShortcut(
+            title = "Enviar comprovante",
+            subtitle = "Envie seu comprovante de pagamento pelo WhatsApp",
+            urlPath = "__receipt__",
+            icon = Icons.Default.UploadFile,
+            iconTint = Color(0xFF0F766E),
+            iconBackground = Color(0xFFCCFBF1)
         ),
         CentralShortcut(
             title = "Contratos / Planos",
@@ -88,6 +100,14 @@ fun HomeScreen(
             icon = Icons.Default.HeadsetMic,
             iconTint = Color(0xFF7C3AED),
             iconBackground = Color(0xFFF3E8FF)
+        ),
+        CentralShortcut(
+            title = "Chamar no WhatsApp",
+            subtitle = "Atendimento pelo WhatsApp da Central",
+            urlPath = "__whatsapp__",
+            icon = Icons.Default.Chat,
+            iconTint = Color(0xFF25D366),
+            iconBackground = Color(0xFFE8F8EF)
         ),
         CentralShortcut(
             title = "Meus Dados",
@@ -230,7 +250,11 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        onNavigateToUrl(shortcut.urlPath, shortcut.title)
+                        when (shortcut.urlPath) {
+                            "__whatsapp__" -> onWhatsAppClick()
+                            "__receipt__" -> onReceiptClick()
+                            else -> onNavigateToUrl(shortcut.urlPath, shortcut.title)
+                        }
                     },
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(

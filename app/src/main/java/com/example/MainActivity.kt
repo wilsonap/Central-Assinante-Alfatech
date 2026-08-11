@@ -74,9 +74,11 @@ import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.example.notifications.NotificationChannels
 import com.example.ui.MainViewModel
+import com.example.ui.WhatsAppSupport
 import com.example.ui.components.CentralWebView
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NotificationsScreen
+import com.example.ui.screens.ReceiptSenderScreen
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
@@ -132,6 +134,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleCentralOrSystemBack() {
+        if (viewModel.showReceiptSender.value) {
+            Log.i("CENTRAL_NAV", "Back action=closeReceiptSender")
+            viewModel.closeReceiptSender()
+            return
+        }
+
         val screen = viewModel.currentScreen.value
         val url = viewModel.currentUrl.value
         val canGoBack = activeWebView?.canGoBack() == true
@@ -223,6 +231,9 @@ fun AlfatechMainApp(
     val currentUrl by viewModel.currentUrl.collectAsState()
     val currentTitle by viewModel.currentTitle.collectAsState()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+    val showReceiptSender by viewModel.showReceiptSender.collectAsState()
+    val clientFullName by viewModel.clientFullName.collectAsState()
+    val supportWhatsAppNumber by viewModel.supportWhatsAppNumber.collectAsState()
 
     var showNotificationsSheet by remember { mutableStateOf(false) }
 
@@ -444,13 +455,19 @@ fun AlfatechMainApp(
                 onUrlChanged = { newUrl ->
                     viewModel.onUrlChanged(newUrl)
                 },
+                onWhatsAppConfigFound = { number, message, fullUrl, source ->
+                    viewModel.updateWhatsAppConfig(number, message, fullUrl, source)
+                },
+                onClientFullNameFound = { fullName ->
+                    viewModel.updateClientFullName(fullName)
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(0f)
             )
 
             // Render Native Home Screen on top when currentScreen == 0
-            if (currentScreen == 0) {
+            if (currentScreen == 0 && !showReceiptSender) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -460,7 +477,31 @@ fun AlfatechMainApp(
                     HomeScreen(
                         onNavigateToUrl = { path, title ->
                             viewModel.navigateToShortcut(path, title)
-                        }
+                        },
+                        onWhatsAppClick = {
+                            WhatsAppSupport.openChat(
+                                context = context,
+                                number = viewModel.supportWhatsAppNumber.value,
+                                message = viewModel.supportWhatsAppMessage.value,
+                                fullUrl = viewModel.supportWhatsAppUrl.value
+                            )
+                        },
+                        onReceiptClick = { viewModel.openReceiptSender() }
+                    )
+                }
+            }
+
+            if (showReceiptSender) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    ReceiptSenderScreen(
+                        clientFullName = clientFullName,
+                        supportWhatsAppNumber = supportWhatsAppNumber,
+                        onClose = { viewModel.closeReceiptSender() }
                     )
                 }
             }
