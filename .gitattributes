@@ -1,0 +1,4 @@
+# Tratar ícones como binário (evita merge corrompido)
+*.png binary
+*.webp binary
+app/src/main/res/mipmap*/ic_launcher*.png binary

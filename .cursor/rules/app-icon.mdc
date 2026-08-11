@@ -1,0 +1,13 @@
+---
+description: Nunca sobrescrever o ícone Alfatech do app
+globs: app/src/main/res/**/ic_launcher*
+alwaysApply: false
+---
+# Ícone do app (Alfatech)
+
+Não regenerar nem substituir `ic_launcher*` por vetores genéricos do Android Studio / AI.
+
+- Fonte canônica: `branding/alfatech-app-icon-source.png`
+- Adaptive icon deve usar `@mipmap/ic_launcher_foreground` (PNG), nunca `@drawable/ic_launcher_foreground` vetorial genérico
+- Para atualizar: `powershell -ExecutionPolicy Bypass -File scripts/sync-app-icon.ps1`
+- Sempre commitar `branding/` + `mipmap-*/ic_launcher*.png` juntos
