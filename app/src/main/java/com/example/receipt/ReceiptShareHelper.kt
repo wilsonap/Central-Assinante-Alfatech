@@ -25,6 +25,16 @@ object ReceiptShareHelper {
     fun normalizePhone(raw: String?): String =
         raw.orEmpty().filter { it.isDigit() }
 
+    fun formatJid(phoneDigits: String): String {
+        val clean = normalizePhone(phoneDigits)
+        val formatted = when {
+            clean.length == 10 || clean.length == 11 -> "55$clean"
+            clean.startsWith("55") -> clean
+            else -> clean
+        }
+        return "$formatted@s.whatsapp.net"
+    }
+
     fun buildMessage(fullName: String): String {
         return buildString {
             append("Olá, Alfatech Telecom. Segue meu comprovante de pagamento.")
@@ -37,7 +47,7 @@ object ReceiptShareHelper {
 
     /**
      * Enviar comprovante: ACTION_SEND + EXTRA_STREAM + EXTRA_TEXT + ClipData + createChooser.
-     * Sem setPackage. Sem wa.me.
+     * Sem setPackage ou com package resolvido dinamicamente. Sem wa.me.
      */
     fun shareFileToWhatsApp(
         context: Context,
@@ -70,34 +80,139 @@ object ReceiptShareHelper {
             return false
         }
 
-        if (!canOpenUri(context, shareUri)) {
-            Log.e(TAG, "canOpenUri=false")
-            Toast.makeText(context, "Não foi possível ler o comprovante.", Toast.LENGTH_SHORT).show()
+        val isPdf = mimeType.contains("pdf", ignoreCase = true)
+        val validation = validatePhysicalFile(context, shareUri, isPdf)
+        if (!validation.readable || validation.byteCount <= 0L) {
+            Log.e(TAG, "arquivo inválido ou inacessível no momento do share: readable=${validation.readable}, bytes=${validation.byteCount}")
+            Toast.makeText(context, "Arquivo do comprovante não está acessível.", Toast.LENGTH_SHORT).show()
             return false
         }
 
-        val mime = if (mimeType.contains("pdf", ignoreCase = true)) {
-            "application/pdf"
-        } else {
-            "image/*"
+        val exactMime = if (isPdf) "application/pdf" else "image/jpeg"
+        val cleanDigits = if (digits.startsWith("55")) digits else "55$digits"
+        val jid = "$cleanDigits@s.whatsapp.net"
+
+        // Concede permissão explícita aos pacotes do WhatsApp
+        for (pkg in WHATSAPP_PACKAGES) {
+            try {
+                context.grantUriPermission(pkg, shareUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                Log.w(TAG, "grantUriPermission fail for $pkg: ${e.message}")
+            }
         }
 
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = mime
-            putExtra(Intent.EXTRA_STREAM, shareUri)
-            putExtra(Intent.EXTRA_TEXT, message)
-            clipData = ClipData.newRawUri("comprovante", shareUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        fun createShareIntent(packageName: String?): Intent {
+            return Intent(Intent.ACTION_SEND).apply {
+                type = exactMime
+                putExtra(Intent.EXTRA_STREAM, shareUri)
+                putExtra(Intent.EXTRA_TEXT, message)
+                putExtra("jid", jid)
+                clipData = ClipData.newRawUri("comprovante", shareUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (packageName != null) {
+                    setPackage(packageName)
+                }
+            }
         }
 
+        // AUDIT LOGGING (RECEIPT_SHARE_AUDIT)
+        val sourceTag = if (isPdf) "pdf" else "stamped"
+        Log.i(
+            "RECEIPT_SHARE_AUDIT",
+            "source=$sourceTag " +
+            "scheme=${shareUri.scheme} " +
+            "mime=$exactMime " +
+            "readable=${validation.readable} " +
+            "byteCount=${validation.byteCount} " +
+            "authority=${shareUri.authority} " +
+            "jid=$jid"
+        )
+
+        // Tenta disparar diretamente para com.whatsapp, depois com.whatsapp.w4b (Business), e por fim via Chooser
         return try {
-            context.startActivity(Intent.createChooser(intent, "Enviar comprovante"))
+            context.startActivity(createShareIntent("com.whatsapp"))
             true
-        } catch (e: Exception) {
-            Log.w(TAG, "share fail=${e.javaClass.simpleName}")
-            Toast.makeText(context, "Não foi possível abrir o compartilhamento.", Toast.LENGTH_SHORT).show()
-            false
+        } catch (e1: Exception) {
+            Log.w(TAG, "Direct com.whatsapp failed: ${e1.message}, trying com.whatsapp.w4b")
+            try {
+                context.startActivity(createShareIntent("com.whatsapp.w4b"))
+                true
+            } catch (e2: Exception) {
+                Log.w(TAG, "Direct com.whatsapp.w4b failed: ${e2.message}, falling back to Chooser")
+                try {
+                    val chooserIntent = Intent.createChooser(createShareIntent(null), "Enviar comprovante").apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        clipData = ClipData.newRawUri("comprovante", shareUri)
+                    }
+                    context.startActivity(chooserIntent)
+                    true
+                } catch (e3: Exception) {
+                    Log.e(TAG, "All share attempts failed", e3)
+                    Toast.makeText(context, "Não foi possível abrir o WhatsApp.", Toast.LENGTH_SHORT).show()
+                    false
+                }
+            }
         }
+    }
+
+    private data class FileValidation(
+        val readable: Boolean,
+        val byteCount: Long
+    )
+
+    private fun validatePhysicalFile(context: Context, uri: Uri, isPdf: Boolean): FileValidation {
+        return try {
+            var size = 0L
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                size = pfd.statSize
+            }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val header = ByteArray(4)
+                val read = input.read(header)
+                if (read <= 0) return FileValidation(false, 0L)
+
+                if (isPdf) {
+                    // Check %PDF header
+                    if (read >= 4 && header[0] == 0x25.toByte() && header[1] == 0x50.toByte() && header[2] == 0x44.toByte() && header[3] == 0x46.toByte()) {
+                        Log.d(TAG, "PDF header verified (%PDF)")
+                    }
+                } else {
+                    // Check JPEG header (0xFF, 0xD8)
+                    if (read >= 2 && (header[0].toInt() and 0xFF) == 0xFF && (header[1].toInt() and 0xFF) == 0xD8) {
+                        Log.d(TAG, "JPEG header verified (0xFFD8)")
+                    }
+                }
+
+                if (size <= 0L) {
+                    var total = read.toLong()
+                    val buf = ByteArray(8192)
+                    var r: Int
+                    while (input.read(buf).also { r = it } != -1) {
+                        total += r
+                    }
+                    size = total
+                }
+            }
+            FileValidation(readable = size > 0L, byteCount = size)
+        } catch (e: Exception) {
+            Log.w(TAG, "validatePhysicalFile fail=${e.javaClass.simpleName}")
+            FileValidation(readable = false, byteCount = 0L)
+        }
+    }
+
+    private fun resolveSingleInstalledWhatsAppPackage(context: Context): String? {
+        val pm = context.packageManager
+        val installed = mutableListOf<String>()
+        for (pkg in WHATSAPP_PACKAGES) {
+            try {
+                pm.getPackageInfo(pkg, 0)
+                installed.add(pkg)
+            } catch (_: PackageManager.NameNotFoundException) {
+            }
+        }
+        // Retorna o pacote somente se houver exatamente um instalado (ex: só WhatsApp ou só Business).
+        // Se ambos estiverem instalados, retorna null para permitir que o Chooser apresente as duas opções.
+        return if (installed.size == 1) installed.first() else null
     }
 
     /**

@@ -62,19 +62,21 @@ object ReceiptImageStamper {
             } ?: return null
 
             val footerLines = buildFooterLines(fullName)
-            val density = context.resources.displayMetrics.density
-            val lineHeight = (18 * density).toInt()
-            val padding = (12 * density).toInt()
-            val footerHeight = padding * 2 + lineHeight * footerLines.size
+            val width = original.width.coerceAtLeast(100)
 
-            val width = original.width.coerceAtLeast(1)
+            // Dynamic scale based on original image width to keep stamp perfectly crisp and proportional
+            val textSizePx = (width * 0.032f).coerceIn(24f, 120f)
+            val paddingPx = (width * 0.03f).coerceIn(20f, 100f)
+            val lineHeightPx = textSizePx * 1.35f
+            val footerHeight = (paddingPx * 2 + lineHeightPx * footerLines.size).toInt()
+
             val height = original.height + footerHeight
             val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(out)
             canvas.drawColor(Color.WHITE)
             canvas.drawBitmap(original, 0f, 0f, null)
 
-            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#F3F4F6") }
+            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#F8FAFC") }
             canvas.drawRect(
                 0f,
                 original.height.toFloat(),
@@ -84,19 +86,20 @@ object ReceiptImageStamper {
             )
 
             val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#1F2937")
-                textSize = 14f * density
+                color = Color.parseColor("#0F172A")
+                textSize = textSizePx
+                isFakeBoldText = true
             }
-            var y = original.height + padding + lineHeight * 0.8f
+            var y = original.height + paddingPx + textSizePx
             footerLines.forEach { line ->
-                canvas.drawText(line, padding.toFloat(), y, textPaint)
-                y += lineHeight
+                canvas.drawText(line, paddingPx, y, textPaint)
+                y += lineHeightPx
             }
 
             val dir = prepareCacheDir(context)
             val outFile = File(dir, "stamped_${System.currentTimeMillis()}.jpg")
             FileOutputStream(outFile).use { fos ->
-                out.compress(Bitmap.CompressFormat.JPEG, 90, fos)
+                out.compress(Bitmap.CompressFormat.JPEG, 98, fos)
             }
             if (!original.isRecycled) original.recycle()
             if (!out.isRecycled) out.recycle()

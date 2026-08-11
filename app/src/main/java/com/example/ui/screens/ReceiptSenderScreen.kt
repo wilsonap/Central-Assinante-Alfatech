@@ -423,7 +423,7 @@ private fun PreviewPane(
         }
 
         Text(
-            text = "Seu comprovante está pronto. Escolha como deseja enviar para a Alfatech.",
+            text = "Seu comprovante está pronto. Escolha a melhor opção para o seu envio:",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -434,10 +434,10 @@ private fun PreviewPane(
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
         ) {
-            Text("Enviar comprovante", fontWeight = FontWeight.Bold)
+            Text("1. Enviar comprovante anexado (Recomendado)", fontWeight = FontWeight.Bold)
         }
         Text(
-            text = "Escolha WhatsApp e depois selecione Alfatech Telecom.",
+            text = "Abre o WhatsApp com o arquivo anexado e a mensagem pronta. Basta selecionar Alfatech na lista e enviar.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -447,10 +447,10 @@ private fun PreviewPane(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text("Abrir conversa da Alfatech")
+            Text("2. Abrir conversa da Alfatech (Contato não salvo)")
         }
         Text(
-            text = "Abre diretamente o atendimento da Alfatech. O comprovante deverá ser anexado manualmente.",
+            text = "Abre a conversa direta com o suporte da Alfatech imediatamente (mesmo se não estiver salvo na sua agenda). Anexe o comprovante pelo ícone de clipe 📎 no WhatsApp.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
