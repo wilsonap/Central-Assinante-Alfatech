@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -63,6 +64,8 @@ fun CentralWebView(
     url: String,
     modifier: Modifier = Modifier,
     fcmToken: String = "",
+    /** When false, WebView stays alive (session/cookies) but is GONE so it cannot cover the native Home. */
+    isVisible: Boolean = true,
     onWebViewCreated: (WebView) -> Unit = {},
     onTitleChanged: (String) -> Unit = {},
     onUrlChanged: (String) -> Unit = {}
@@ -305,7 +308,13 @@ fun CentralWebView(
                         loadUrl(url)
                     }
                 },
-                update = { }
+                update = { webView ->
+                    // Hide native surface while Home is shown — prevents WebView from painting over Compose.
+                    webView.visibility = if (isVisible) View.VISIBLE else View.GONE
+                    if (!isVisible) {
+                        webView.clearFocus()
+                    }
+                }
             )
 
             AnimatedVisibility(

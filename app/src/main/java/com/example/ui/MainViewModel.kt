@@ -111,6 +111,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedTab.value = 0
     }
 
+    /**
+     * True when the WebView URL is the Central root (or logged-in landing),
+     * so system Back should leave the WebView and restore the native Home.
+     */
+    fun isAtCentralRoot(): Boolean {
+        val raw = _currentUrl.value
+            .substringBefore('#')
+            .substringBefore('?')
+            .trimEnd('/')
+        val root = baseUrl.trimEnd('/')
+        if (raw.equals(root, ignoreCase = true)) return true
+        if (!raw.startsWith(root, ignoreCase = true)) return false
+        val path = raw.substring(root.length).trimStart('/').lowercase()
+        return path.isEmpty() || path in setOf(
+            "principal", "home", "painel", "dashboard", "index"
+        )
+    }
+
     fun updateWebTitle(newTitle: String) {
         if (newTitle.isNotBlank() && _currentScreen.value == 1) {
             _currentTitle.value = newTitle
