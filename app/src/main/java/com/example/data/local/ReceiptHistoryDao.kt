@@ -17,6 +17,9 @@ interface ReceiptHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: ReceiptHistoryEntity): Long
 
+    @Query("UPDATE receipt_history SET status = :status WHERE id = :id")
+    suspend fun updateStatus(id: Long, status: String)
+
     @Query("DELETE FROM receipt_history WHERE id = :id")
     suspend fun deleteById(id: Long)
 

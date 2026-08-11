@@ -98,13 +98,19 @@ fun ReceiptHistoryScreen(
                         clientCode = detail.clientCode.orEmpty(),
                         contract = detail.clientContract.orEmpty()
                     )
-                    ReceiptShareHelper.shareFileToWhatsApp(
+                    val started = ReceiptShareHelper.shareFileToWhatsApp(
                         context = context,
                         selectedUri = uri,
                         mimeType = detail.mimeType,
                         phoneDigits = supportWhatsAppNumber,
                         message = message
                     )
+                    if (started) {
+                        scope.launch {
+                            ReceiptHistoryStore.markShared(context, detail.id)
+                            selected = selected?.copy(status = ReceiptHistoryEntity.STATUS_SHARED)
+                        }
+                    }
                 }
             },
             onOpenPdf = {
@@ -157,7 +163,7 @@ fun ReceiptHistoryScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 if (receipts.isEmpty()) {
                     Text(
-                        text = "Nenhum comprovante compartilhado ainda.",
+                        text = "Nenhum comprovante no histórico ainda.",
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -250,6 +256,11 @@ private fun ReceiptHistoryRow(
                     formatDateTime(entity.createdAt),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = ReceiptHistoryStore.statusLabel(entity.status),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Text(
                     text = if (isPdf) "PDF" else "Imagem",
@@ -360,8 +371,13 @@ private fun ReceiptHistoryDetail(
             entity.clientContract?.let { Text("Contrato: $it", fontSize = 13.sp) }
             Text("Data: ${formatDateTime(entity.createdAt)}", fontSize = 13.sp)
             Text(
-                "Status: compartilhamento iniciado",
+                "Status: ${ReceiptHistoryStore.statusLabel(entity.status)}",
                 fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "O Android não confirma se a mensagem foi enviada no WhatsApp.",
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(

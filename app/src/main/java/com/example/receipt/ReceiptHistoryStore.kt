@@ -15,7 +15,7 @@ import java.io.FileOutputStream
 
 /**
  * Cópia privada em filesDir/receipts + persistência Room.
- * Não carimba, não recomprime; cópia byte-a-byte.
+ * Status: prepared (salvo) → shared (share Intent iniciado). Sem confirmação de envio WhatsApp.
  */
 object ReceiptHistoryStore {
 
@@ -38,7 +38,8 @@ object ReceiptHistoryStore {
         )
     }
 
-    suspend fun archiveAfterShareStarted(
+    /** Salva cópia local com status=prepared. Não implica compartilhamento nem envio. */
+    suspend fun archivePrepared(
         context: Context,
         sourceUri: Uri,
         mimeType: String,
@@ -70,14 +71,30 @@ object ReceiptHistoryStore {
                 clientContract = clientContract?.trim()?.takeIf { it.isNotBlank() },
                 createdAt = System.currentTimeMillis(),
                 sentAt = null,
-                status = ReceiptHistoryEntity.STATUS_SHARED
+                status = ReceiptHistoryEntity.STATUS_PREPARED
             )
             val id = AppDatabase.getDatabase(context).receiptHistoryDao().insert(entity)
-            Log.i(TAG, "archived id=$id status=shared mime=$mime")
+            Log.i(TAG, "archived id=$id status=prepared mime=$mime")
             id
         } catch (e: Exception) {
             Log.w(TAG, "archive fail=${e.javaClass.simpleName}")
             null
+        }
+    }
+
+    /**
+     * Marca shared após startActivity do ACTION_SEND ter sido executado com sucesso.
+     * Não confirma que o usuário tocou Enviar no WhatsApp.
+     */
+    suspend fun markShared(context: Context, id: Long): Boolean = withContext(Dispatchers.IO) {
+        try {
+            AppDatabase.getDatabase(context).receiptHistoryDao()
+                .updateStatus(id, ReceiptHistoryEntity.STATUS_SHARED)
+            Log.i(TAG, "status id=$id -> shared")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "markShared fail=${e.javaClass.simpleName}")
+            false
         }
     }
 
@@ -98,6 +115,12 @@ object ReceiptHistoryStore {
         val count = dao.count()
         val bytes = historyDir(context).listFiles()?.sumOf { it.length() } ?: 0L
         count to bytes
+    }
+
+    fun statusLabel(status: String): String = when (status) {
+        ReceiptHistoryEntity.STATUS_PREPARED -> "Salvo localmente"
+        ReceiptHistoryEntity.STATUS_SHARED -> "Compartilhamento iniciado"
+        else -> status
     }
 
     private fun queryDisplayName(context: Context, uri: Uri): String? {

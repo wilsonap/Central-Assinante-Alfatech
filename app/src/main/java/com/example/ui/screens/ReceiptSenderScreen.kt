@@ -227,23 +227,24 @@ fun ReceiptSenderScreen(
                         Log.i(URI_LOG, "RECEIPT_ORIGINAL_URI id=$originalId")
                         Log.i(URI_LOG, "RECEIPT_SHARE_URI id=$shareId")
                         Log.i(URI_LOG, "sameOriginalShare=${originalId == shareId}")
-                        val started = ReceiptShareHelper.shareFileToWhatsApp(
-                            context = context,
-                            selectedUri = uri,
-                            mimeType = selectedMime,
-                            phoneDigits = supportWhatsAppNumber,
-                            message = message
-                        )
-                        if (started) {
-                            scope.launch {
-                                ReceiptHistoryStore.archiveAfterShareStarted(
-                                    context = context,
-                                    sourceUri = uri,
-                                    mimeType = selectedMime,
-                                    clientName = clientFullName,
-                                    clientCode = clientCode,
-                                    clientContract = clientContract
-                                )
+                        scope.launch {
+                            val historyId = ReceiptHistoryStore.archivePrepared(
+                                context = context,
+                                sourceUri = uri,
+                                mimeType = selectedMime,
+                                clientName = clientFullName,
+                                clientCode = clientCode,
+                                clientContract = clientContract
+                            )
+                            val started = ReceiptShareHelper.shareFileToWhatsApp(
+                                context = context,
+                                selectedUri = uri,
+                                mimeType = selectedMime,
+                                phoneDigits = supportWhatsAppNumber,
+                                message = message
+                            )
+                            if (started && historyId != null) {
+                                ReceiptHistoryStore.markShared(context, historyId)
                             }
                         }
                     },
