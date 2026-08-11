@@ -5,9 +5,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -69,6 +70,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.example.notifications.NotificationChannels
 import com.example.ui.MainViewModel
@@ -82,6 +84,16 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var activeWebView: WebView? = null
 
+    /**
+     * Activity-level back callback kept at the top of the dispatcher so Chromium WebView
+     * cannot swallow KEYCODE_BACK before navigateToHome() runs.
+     */
+    private val centralBackCallback = object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+            handleCentralOrSystemBack()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -93,16 +105,54 @@ class MainActivity : ComponentActivity() {
 
         handleNotificationIntent(intent)
 
+        // Register early; reassertBackCallback() re-adds after WebView attaches/navigates.
+        onBackPressedDispatcher.addCallback(this, centralBackCallback)
+
         setContent {
             MyApplicationTheme {
                 AlfatechMainApp(
                     viewModel = viewModel,
-                    onWebViewCreated = { webView -> activeWebView = webView },
+                    onWebViewCreated = { webView ->
+                        activeWebView = webView
+                        reassertBackCallback()
+                    },
                     onRefreshWeb = { activeWebView?.reload() },
                     canWebViewGoBack = { activeWebView?.canGoBack() == true },
-                    webViewGoBack = { activeWebView?.goBack() }
+                    webViewGoBack = { activeWebView?.goBack() },
+                    onReassertBack = { reassertBackCallback() }
                 )
             }
+        }
+    }
+
+    /** Puts our back callback above WebView's OnBackInvokedCallback (LIFO). */
+    fun reassertBackCallback() {
+        centralBackCallback.remove()
+        onBackPressedDispatcher.addCallback(this, centralBackCallback)
+    }
+
+    private fun handleCentralOrSystemBack() {
+        val screen = viewModel.currentScreen.value
+        val url = viewModel.currentUrl.value
+        val canGoBack = activeWebView?.canGoBack() == true
+        val screenLabel = if (screen == 1) "CENTRAL" else "HOME"
+        Log.i(
+            "CENTRAL_NAV",
+            "Back pressed screen=$screenLabel url=$url canGoBack=$canGoBack"
+        )
+
+        if (screen == 1) {
+            if (viewModel.isAtCentralRoot() || !canGoBack) {
+                Log.i("CENTRAL_NAV", "Back action=navigateToHome")
+                viewModel.navigateToHome()
+            } else {
+                Log.i("CENTRAL_NAV", "Back action=webView.goBack()")
+                activeWebView?.goBack()
+            }
+            reassertBackCallback()
+        } else {
+            Log.i("CENTRAL_NAV", "Back action=finish (HOME)")
+            finish()
         }
     }
 
@@ -161,8 +211,9 @@ fun AlfatechMainApp(
     viewModel: MainViewModel,
     onWebViewCreated: (WebView) -> Unit,
     onRefreshWeb: () -> Unit,
-    canWebViewGoBack: () -> Boolean,
-    webViewGoBack: () -> Unit
+    @Suppress("UNUSED_PARAMETER") canWebViewGoBack: () -> Boolean,
+    @Suppress("UNUSED_PARAMETER") webViewGoBack: () -> Unit,
+    onReassertBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val currentScreen by viewModel.currentScreen.collectAsState()
@@ -199,17 +250,9 @@ fun AlfatechMainApp(
         }
     }
 
-    // Handle physical / gesture back button
-    BackHandler(enabled = true) {
-        if (currentScreen == 1) {
-            if (canWebViewGoBack()) {
-                webViewGoBack()
-            } else {
-                viewModel.navigateToHome()
-            }
-        } else {
-            (context as? ComponentActivity)?.finish()
-        }
+    // Keep Activity back callback above WebView's after URL/screen changes
+    LaunchedEffect(currentScreen, currentUrl) {
+        onReassertBack()
     }
 
     val unreadCount = notifications.count { !it.isRead }
@@ -292,11 +335,11 @@ fun AlfatechMainApp(
                             navigationIcon = {
                                 IconButton(
                                     onClick = {
-                                        if (canWebViewGoBack()) {
-                                            webViewGoBack()
-                                        } else {
-                                            viewModel.navigateToHome()
-                                        }
+                                        android.util.Log.i(
+                                            "CENTRAL_NAV",
+                                            "Blue arrow action=navigateToHome screen=CENTRAL url=$currentUrl"
+                                        )
+                                        viewModel.navigateToHome()
                                     }
                                 ) {
                                     Icon(
@@ -388,10 +431,12 @@ fun AlfatechMainApp(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Keep CentralWebView in Composition so session/cookies/JS remain active continuously
+            // Keep CentralWebView in Composition so session/cookies/JS remain active continuously.
+            // Hide its native surface while Home is active to avoid z-order / empty-home bugs.
             CentralWebView(
                 url = currentUrl,
                 fcmToken = fcmToken,
+                isVisible = currentScreen == 1,
                 onWebViewCreated = onWebViewCreated,
                 onTitleChanged = { newTitle ->
                     viewModel.updateWebTitle(newTitle)
@@ -399,16 +444,25 @@ fun AlfatechMainApp(
                 onUrlChanged = { newUrl ->
                     viewModel.onUrlChanged(newUrl)
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(0f)
             )
 
             // Render Native Home Screen on top when currentScreen == 0
             if (currentScreen == 0) {
-                HomeScreen(
-                    onNavigateToUrl = { path, title ->
-                        viewModel.navigateToShortcut(path, title)
-                    }
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(1f)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    HomeScreen(
+                        onNavigateToUrl = { path, title ->
+                            viewModel.navigateToShortcut(path, title)
+                        }
+                    )
+                }
             }
         }
 

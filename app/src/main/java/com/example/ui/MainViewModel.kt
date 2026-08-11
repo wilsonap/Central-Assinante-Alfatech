@@ -71,22 +71,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedTab.value = tabIndex
         when (tabIndex) {
             0 -> {
-                _currentScreen.value = 0
+                navigateToHome()
             }
             1 -> {
-                _currentScreen.value = 1
-                _currentUrl.value = "${baseUrl}faturas"
-                _currentTitle.value = "Faturas"
+                openCentral("${baseUrl}faturas", "Faturas", selectedTabValue = 1)
             }
             2 -> {
-                _currentScreen.value = 1
-                _currentUrl.value = "${baseUrl}atendimentos"
-                _currentTitle.value = "Suporte / Atendimento"
+                openCentral("${baseUrl}atendimentos", "Suporte / Atendimento", selectedTabValue = 2)
             }
             3 -> {
-                _currentScreen.value = 1
-                _currentUrl.value = "${baseUrl}dados_cliente"
-                _currentTitle.value = "Meus Dados"
+                openCentral("${baseUrl}dados_cliente", "Meus Dados", selectedTabValue = 3)
             }
         }
     }
@@ -94,21 +88,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateToShortcut(path: String, title: String) {
         _isLoggedIn.value = true
         val targetUrl = if (path.isBlank()) baseUrl else if (path.startsWith("http")) path else "${baseUrl}$path"
-        _currentUrl.value = targetUrl
-        _currentTitle.value = title
-        _currentScreen.value = 1
-
-        when (path) {
-            "faturas" -> _selectedTab.value = 1
-            "atendimentos" -> _selectedTab.value = 2
-            "dados_cliente" -> _selectedTab.value = 3
-            else -> _selectedTab.value = -1
+        val tab = when (path) {
+            "faturas" -> 1
+            "atendimentos" -> 2
+            "dados_cliente" -> 3
+            else -> -1
         }
+        openCentral(targetUrl, title, selectedTabValue = tab)
     }
 
     fun navigateToHome() {
+        val prev = screenLabel(_currentScreen.value)
         _currentScreen.value = 0
         _selectedTab.value = 0
+        android.util.Log.i("CENTRAL_NAV", "navigateToHome $prev -> HOME")
+    }
+
+    private fun openCentral(url: String, title: String, selectedTabValue: Int) {
+        val prev = screenLabel(_currentScreen.value)
+        _currentUrl.value = url
+        _currentTitle.value = title
+        _selectedTab.value = selectedTabValue
+        _currentScreen.value = 1
+        android.util.Log.i("CENTRAL_NAV", "openCentral $prev -> CENTRAL url=$url")
+    }
+
+    private fun screenLabel(screen: Int): String = if (screen == 1) "CENTRAL" else "HOME"
+
+    /**
+     * True when the WebView URL is the Central root (or logged-in landing),
+     * so system Back should leave the WebView and restore the native Home.
+     */
+    fun isAtCentralRoot(): Boolean {
+        val raw = _currentUrl.value
+            .substringBefore('#')
+            .substringBefore('?')
+            .trimEnd('/')
+        val root = baseUrl.trimEnd('/')
+        if (raw.equals(root, ignoreCase = true)) return true
+        if (!raw.startsWith(root, ignoreCase = true)) return false
+        val path = raw.substring(root.length).trimStart('/').lowercase()
+        return path.isEmpty() || path in setOf(
+            "principal", "home", "painel", "dashboard", "index"
+        )
     }
 
     fun updateWebTitle(newTitle: String) {
