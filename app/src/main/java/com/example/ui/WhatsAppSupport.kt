@@ -22,6 +22,33 @@ object WhatsAppSupport {
         val fullUrl: String
     )
 
+    /**
+     * Mensagem do atalho "Chamar no WhatsApp".
+     * Reutiliza os mesmos campos já capturados para Enviar comprovante
+     * ([MainViewModel.clientFullName], [MainViewModel.clientCode], [MainViewModel.clientContract]).
+     * Campos vazios são omitidos; não bloqueia se o perfil ainda não carregou.
+     */
+    fun buildSupportMessage(
+        fullName: String = "",
+        clientCode: String = "",
+        contract: String = ""
+    ): String {
+        val name = fullName.trim()
+        val code = clientCode.trim()
+        val contrato = contract.trim()
+        return buildString {
+            append("Olá, Alfatech Telecom!\n")
+            append("Preciso de atendimento.\n")
+            if (name.isNotBlank() || code.isNotBlank() || contrato.isNotBlank()) {
+                append('\n')
+                if (name.isNotBlank()) append("Cliente: ").append(name).append('\n')
+                if (code.isNotBlank()) append("Código: ").append(code).append('\n')
+                if (contrato.isNotBlank()) append("Contrato: ").append(contrato).append('\n')
+            }
+            append("\nEnviado pelo app Central do Assinante Alfatech.")
+        }
+    }
+
     fun parseFromHref(href: String?): Config? {
         if (href.isNullOrBlank()) return null
         val uri = try {

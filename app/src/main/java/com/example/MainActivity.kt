@@ -490,10 +490,15 @@ fun AlfatechMainApp(
                             viewModel.navigateToShortcut(path, title)
                         },
                         onWhatsAppClick = {
+                            val message = WhatsAppSupport.buildSupportMessage(
+                                fullName = clientFullName,
+                                clientCode = clientCode,
+                                contract = clientContract
+                            )
                             WhatsAppSupport.openChat(
                                 context = context,
                                 number = viewModel.supportWhatsAppNumber.value,
-                                message = viewModel.supportWhatsAppMessage.value,
+                                message = message,
                                 fullUrl = viewModel.supportWhatsAppUrl.value
                             )
                         },
