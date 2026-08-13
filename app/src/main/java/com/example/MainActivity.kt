@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -73,18 +74,22 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.example.notifications.NotificationChannels
+import com.example.offline.OfflineStartup
 import com.example.ui.MainViewModel
 import com.example.ui.WhatsAppSupport
 import com.example.ui.components.CentralWebView
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.NeedsFirstOnlineAuthScreen
 import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.ReceiptSenderScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.update.InAppUpdateCoordinator
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private var activeWebView: WebView? = null
+    private lateinit var inAppUpdateCoordinator: InAppUpdateCoordinator
 
     /**
      * Activity-level back callback kept at the top of the dispatcher so Chromium WebView
@@ -98,6 +103,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Context válido somente após super.onCreate — evita NPE em AppUpdateManagerFactory.
+        inAppUpdateCoordinator = InAppUpdateCoordinator(this)
+        inAppUpdateCoordinator.onCreate()
+        Log.i("APP_UPDATE", "coordinator_initialized=true")
+
         enableEdgeToEdge()
 
         // Enable global cookies for auto-login persistence
@@ -127,6 +138,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // In-App Update flexível: só com app aberto (fase 1).
+        if (::inAppUpdateCoordinator.isInitialized) {
+            inAppUpdateCoordinator.checkOnForeground()
+        }
+    }
+
+    override fun onDestroy() {
+        if (::inAppUpdateCoordinator.isInitialized) {
+            inAppUpdateCoordinator.onDestroy()
+        }
+        super.onDestroy()
+    }
+
     /** Puts our back callback above WebView's OnBackInvokedCallback (LIFO). */
     fun reassertBackCallback() {
         centralBackCallback.remove()
@@ -134,6 +160,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleCentralOrSystemBack() {
+        if (viewModel.needsFirstOnlineAuth.value) {
+            Log.i("CENTRAL_NAV", "Back action=finish (needsFirstOnlineAuth)")
+            finish()
+            return
+        }
         if (viewModel.showReceiptHistory.value) {
             Log.i("CENTRAL_NAV", "Back action=closeReceiptHistory")
             viewModel.closeReceiptHistory()
@@ -148,24 +179,35 @@ class MainActivity : ComponentActivity() {
         val screen = viewModel.currentScreen.value
         val url = viewModel.currentUrl.value
         val canGoBack = activeWebView?.canGoBack() == true
-        val screenLabel = if (screen == 1) "CENTRAL" else "HOME"
+        val screenLabel = when (screen) {
+            1 -> "CENTRAL"
+            2 -> "INVOICES"
+            else -> "HOME"
+        }
         Log.i(
             "CENTRAL_NAV",
             "Back pressed screen=$screenLabel url=$url canGoBack=$canGoBack"
         )
 
-        if (screen == 1) {
-            if (viewModel.isAtCentralRoot() || !canGoBack) {
-                Log.i("CENTRAL_NAV", "Back action=navigateToHome")
+        when (screen) {
+            2 -> {
+                Log.i("CENTRAL_NAV", "Back action=navigateToHome from INVOICES")
                 viewModel.navigateToHome()
-            } else {
-                Log.i("CENTRAL_NAV", "Back action=webView.goBack()")
-                activeWebView?.goBack()
             }
-            reassertBackCallback()
-        } else {
-            Log.i("CENTRAL_NAV", "Back action=finish (HOME)")
-            finish()
+            1 -> {
+                if (viewModel.isAtCentralRoot() || !canGoBack) {
+                    Log.i("CENTRAL_NAV", "Back action=navigateToHome")
+                    viewModel.navigateToHome()
+                } else {
+                    Log.i("CENTRAL_NAV", "Back action=webView.goBack()")
+                    activeWebView?.goBack()
+                }
+                reassertBackCallback()
+            }
+            else -> {
+                Log.i("CENTRAL_NAV", "Back action=finish (HOME)")
+                finish()
+            }
         }
     }
 
@@ -202,6 +244,10 @@ class MainActivity : ComponentActivity() {
             "title=${!title.isNullOrBlank()} body=${!body.isNullOrBlank()} " +
                 "type=$type messageId=$messageId hasUrl=${!targetUrl.isNullOrBlank()}"
         )
+
+        if (extras.getBoolean("open_invoices", false)) {
+            viewModel.navigateToInvoices()
+        }
 
         if (!targetUrl.isNullOrBlank()) {
             viewModel.setTargetUrl(targetUrl)
@@ -245,6 +291,13 @@ fun AlfatechMainApp(
     val clientCode by viewModel.clientCode.collectAsState()
     val clientContract by viewModel.clientContract.collectAsState()
     val supportWhatsAppNumber by viewModel.supportWhatsAppNumber.collectAsState()
+    val invoices by viewModel.invoices.collectAsState()
+    val invoicesLastSyncedAt by viewModel.invoicesLastSyncedAt.collectAsState()
+    val remindDayBefore by viewModel.remindDayBefore.collectAsState()
+    val remindDueDate by viewModel.remindDueDate.collectAsState()
+    val needsFirstOnlineAuth by viewModel.needsFirstOnlineAuth.collectAsState()
+    val centralReloadRequest by viewModel.centralReloadRequest.collectAsState()
+    val autoInvoiceSyncSignal by viewModel.autoInvoiceSyncSignal.collectAsState()
 
     var showNotificationsSheet by remember { mutableStateOf(false) }
 
@@ -277,7 +330,28 @@ fun AlfatechMainApp(
         onReassertBack()
     }
 
+    // Ao voltar a internet após startup offline: recarrega Central (sessão/cookies intactos).
+    LaunchedEffect(centralReloadRequest) {
+        if (centralReloadRequest > 0L) {
+            onRefreshWeb()
+        }
+    }
+
     val unreadCount = notifications.count { !it.isRead }
+
+    if (needsFirstOnlineAuth) {
+        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
+                NeedsFirstOnlineAuthScreen(onRetry = { viewModel.retryFirstOnlineAuth() })
+            }
+        }
+        return
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -287,8 +361,8 @@ fun AlfatechMainApp(
                     color = MaterialTheme.colorScheme.primary,
                     tonalElevation = 4.dp
                 ) {
-                    if (currentScreen == 0) {
-                        // Home Screen Top App Bar
+                    if (currentScreen == 0 || currentScreen == 2) {
+                        // Home / Faturas nativas
                         TopAppBar(
                             colors = TopAppBarDefaults.topAppBarColors(
                                 containerColor = MaterialTheme.colorScheme.primary,
@@ -306,7 +380,11 @@ fun AlfatechMainApp(
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Wifi,
+                                            imageVector = if (currentScreen == 2) {
+                                                Icons.Default.Receipt
+                                            } else {
+                                                Icons.Default.Wifi
+                                            },
                                             contentDescription = null,
                                             tint = Color.White,
                                             modifier = Modifier.size(18.dp)
@@ -315,14 +393,32 @@ fun AlfatechMainApp(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
-                                            text = "Alfatech Telecom",
+                                            text = if (currentScreen == 2) {
+                                                "Faturas"
+                                            } else {
+                                                "Alfatech Telecom"
+                                            },
                                             fontSize = 17.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = "Central do Assinante",
+                                            text = if (currentScreen == 2) {
+                                                "Salvas no aparelho"
+                                            } else {
+                                                "Central do Assinante"
+                                            },
                                             fontSize = 11.sp,
                                             color = Color.White.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                }
+                            },
+                            navigationIcon = {
+                                if (currentScreen == 2) {
+                                    IconButton(onClick = { viewModel.navigateToHome() }) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Voltar"
                                         )
                                     }
                                 }
@@ -409,9 +505,9 @@ fun AlfatechMainApp(
                         )
                     )
 
-                    // Faturas
+                    // Faturas (lista offline Room)
                     NavigationBarItem(
-                        selected = currentScreen == 1 && selectedTab == 1,
+                        selected = currentScreen == 2 || (currentScreen == 1 && selectedTab == 1),
                         onClick = { viewModel.selectBottomTab(1) },
                         icon = { Icon(Icons.Default.Receipt, contentDescription = "Faturas") },
                         label = { Text("Faturas", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
@@ -458,7 +554,7 @@ fun AlfatechMainApp(
             CentralWebView(
                 url = currentUrl,
                 fcmToken = fcmToken,
-                isVisible = currentScreen == 1,
+                isVisible = currentScreen == 1 && !needsFirstOnlineAuth,
                 onWebViewCreated = onWebViewCreated,
                 onTitleChanged = { newTitle ->
                     viewModel.updateWebTitle(newTitle)
@@ -474,6 +570,13 @@ fun AlfatechMainApp(
                 },
                 onPostLoginReady = { trigger ->
                     viewModel.onPostLoginReady(trigger)
+                },
+                onInvoicesJsonReceived = { json ->
+                    viewModel.onInvoicesJsonCaptured(json)
+                },
+                autoInvoiceSyncSignal = autoInvoiceSyncSignal,
+                onAutoInvoiceSyncStarted = { trigger ->
+                    viewModel.onAutoInvoiceSyncStarted(trigger)
                 },
                 modifier = Modifier
                     .fillMaxSize()
@@ -493,20 +596,43 @@ fun AlfatechMainApp(
                             viewModel.navigateToShortcut(path, title)
                         },
                         onWhatsAppClick = {
-                            val message = WhatsAppSupport.buildSupportMessage(
-                                fullName = clientFullName,
-                                clientCode = clientCode,
-                                contract = clientContract
-                            )
-                            WhatsAppSupport.openChat(
-                                context = context,
-                                number = viewModel.supportWhatsAppNumber.value,
-                                message = message,
-                                fullUrl = viewModel.supportWhatsAppUrl.value
-                            )
+                            if (!OfflineStartup.isNetworkAvailable(context)) {
+                                Toast.makeText(context, "Sem conexão", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val message = WhatsAppSupport.buildSupportMessage(
+                                    fullName = clientFullName,
+                                    clientCode = clientCode,
+                                    contract = clientContract
+                                )
+                                WhatsAppSupport.openChat(
+                                    context = context,
+                                    number = viewModel.supportWhatsAppNumber.value,
+                                    message = message,
+                                    fullUrl = viewModel.supportWhatsAppUrl.value
+                                )
+                            }
                         },
                         onReceiptClick = { viewModel.openReceiptSender() },
                         onReceiptHistoryClick = { viewModel.openReceiptHistory() }
+                    )
+                }
+            }
+
+            if (currentScreen == 2 && !showReceiptSender && !showReceiptHistory) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(1f)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    com.example.ui.screens.InvoicesScreen(
+                        invoices = invoices,
+                        lastSyncedAt = invoicesLastSyncedAt,
+                        remindDayBefore = remindDayBefore,
+                        remindDueDate = remindDueDate,
+                        onRemindDayBeforeChange = { viewModel.setRemindDayBefore(it) },
+                        onRemindDueDateChange = { viewModel.setRemindDueDate(it) },
+                        onOpenCentralInvoices = { viewModel.openCentralInvoices() }
                     )
                 }
             }

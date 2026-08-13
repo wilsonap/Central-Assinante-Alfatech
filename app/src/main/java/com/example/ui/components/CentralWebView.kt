@@ -75,7 +75,12 @@ fun CentralWebView(
     onWhatsAppConfigFound: (number: String, message: String, fullUrl: String, source: String) -> Unit = { _, _, _, _ -> },
     onClientProfileFound: (fullName: String, code: String, contract: String) -> Unit = { _, _, _ -> },
     /** Chamado após transição autenticada + ciclo de refreshCentralCustomerData (ou retries esgotados). */
-    onPostLoginReady: (trigger: String) -> Unit = {}
+    onPostLoginReady: (trigger: String) -> Unit = {},
+    /** JSON bruto da resposta IXC getFaturas (capturado via hook XHR/fetch). */
+    onInvoicesJsonReceived: (String) -> Unit = {},
+    /** Pedido externo de sync (ex.: network_recovered). id muda a cada pedido. */
+    autoInvoiceSyncSignal: Pair<Long, String>? = null,
+    onAutoInvoiceSyncStarted: (trigger: String) -> Unit = {}
 ) {
     // fcmToken Compose param retained for call-site compatibility; never frozen into the bridge.
     @Suppress("UNUSED_PARAMETER")
@@ -91,6 +96,9 @@ fun CentralWebView(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val dataRefreshGeneration = remember { AtomicInteger(0) }
     val recoveringFromError = remember { AtomicBoolean(false) }
+    val invoiceSyncHandled = remember { AtomicBoolean(false) }
+    val invoicesCallbackRef = remember { AtomicReference(onInvoicesJsonReceived) }
+    invoicesCallbackRef.set(onInvoicesJsonReceived)
 
     fun scheduleCustomerDataRefresh(
         webView: WebView,
@@ -108,6 +116,26 @@ fun CentralWebView(
         )
     }
 
+    fun runAutoInvoiceSync(webView: WebView, trigger: String, force: Boolean) {
+        if (FcmBridgeController.isAuthBlockedUrl(webView.url)) {
+            Log.i("INVOICE_AUTO_SYNC", "trigger=$trigger")
+            Log.i("INVOICE_AUTO_SYNC", "authValid=false")
+            Log.i("INVOICE_AUTO_SYNC", "syncFailed=true")
+            return
+        }
+        if (force) {
+            invoiceSyncHandled.set(false)
+        }
+        if (!invoiceSyncHandled.compareAndSet(false, true)) {
+            Log.i("INVOICE_AUTO_SYNC", "trigger=$trigger")
+            Log.i("INVOICE_AUTO_SYNC", "syncSkipped=already_synced_this_session")
+            return
+        }
+        onAutoInvoiceSyncStarted(trigger)
+        injectInvoiceCaptureHook(webView)
+        requestSilentGetFaturas(webView, trigger)
+    }
+
     LaunchedEffect(bridgeController) {
         bridgeController.setOnSessionAuthenticated { webView, trigger ->
             val authType = if (trigger == "login_authenticated") "manual" else "automatic"
@@ -116,9 +144,23 @@ fun CentralWebView(
             Log.i("CENTRAL_POST_LOGIN", "data_refresh_started=true")
             scheduleCustomerDataRefresh(webView, trigger) {
                 Log.i("CENTRAL_POST_LOGIN", "data_refresh_finished=true")
+                val syncTrigger = when (trigger) {
+                    "login_authenticated" -> "login_manual"
+                    "session_restored" -> "session_restored"
+                    else -> trigger
+                }
+                // Sync em background; Home não espera o resultado.
+                runAutoInvoiceSync(webView, syncTrigger, force = false)
                 onPostLoginReady(trigger)
             }
         }
+    }
+
+    LaunchedEffect(autoInvoiceSyncSignal, webViewRef) {
+        val signal = autoInvoiceSyncSignal ?: return@LaunchedEffect
+        val wv = webViewRef ?: return@LaunchedEffect
+        if (signal.first <= 0L) return@LaunchedEffect
+        runAutoInvoiceSync(wv, signal.second, force = true)
     }
 
     LaunchedEffect(url, webViewRef) {
@@ -133,7 +175,7 @@ fun CentralWebView(
     }
 
     // Force GONE/VISIBLE on the same WebView instance (update{} alone is not always enough).
-    LaunchedEffect(isVisible, webViewRef) {
+    LaunchedEffect(isVisible, webViewRef, url) {
         val wv = webViewRef ?: return@LaunchedEffect
         val target = if (isVisible) View.VISIBLE else View.GONE
         wv.visibility = target
@@ -242,7 +284,13 @@ fun CentralWebView(
                         }
 
                         addJavascriptInterface(
-                            WebAppInterface(ctx, bridgeController),
+                            WebAppInterface(
+                                context = ctx,
+                                bridgeController = bridgeController,
+                                onInvoicesJsonReceived = { json ->
+                                    invoicesCallbackRef.get()?.invoke(json)
+                                }
+                            ),
                             "AndroidBridge"
                         )
 
@@ -302,13 +350,20 @@ fun CentralWebView(
                                     lastRequestedUrl = it
                                     onUrlChanged(it)
                                     bridgeController.onUrlOrPageChanged(it)
+                                    if (FcmBridgeController.isAuthBlockedUrl(it)) {
+                                        invoiceSyncHandled.set(false)
+                                    }
                                 }
+                                if (view != null) injectInvoiceCaptureHook(view)
                             }
 
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
                                 // Full navigation may leave auth pages — re-evaluate bridge eligibility.
                                 bridgeController.onNavigationStarted(url)
+                                if (FcmBridgeController.isAuthBlockedUrl(url)) {
+                                    invoiceSyncHandled.set(false)
+                                }
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -321,6 +376,9 @@ fun CentralWebView(
                                     lastRequestedUrl = it
                                     onUrlChanged(it)
                                     bridgeController.onUrlOrPageChanged(it)
+                                    if (FcmBridgeController.isAuthBlockedUrl(it)) {
+                                        invoiceSyncHandled.set(false)
+                                    }
                                 }
                                 view?.title?.let { t ->
                                     if (t.isNotBlank() && !t.startsWith("http")) {
@@ -336,6 +394,7 @@ fun CentralWebView(
                                     }
                                     scheduleCustomerDataRefresh(view, trigger)
                                 }
+                                if (view != null) injectInvoiceCaptureHook(view)
                             }
 
                             override fun onReceivedError(
@@ -413,9 +472,134 @@ fun CentralWebView(
 }
 
 private const val CENTRAL_DATA_REFRESH = "CENTRAL_DATA_REFRESH"
-
 /** Delays absolutos a partir do trigger: imediato, +500ms, +1s, +2s. */
 private val CENTRAL_DATA_RETRY_DELAYS_MS = longArrayOf(0L, 500L, 1000L, 2000L)
+
+/**
+ * Dispara getFaturas na sessão autenticada da WebView, sem navegar para /faturas.
+ * Preferência: hs_web.buscarFaturas; fallback: XHR silenciosa (hook captura a resposta).
+ */
+private fun requestSilentGetFaturas(webView: WebView, trigger: String) {
+    Log.i("INVOICE_AUTO_SYNC", "trigger=$trigger")
+    Log.i("INVOICE_AUTO_SYNC", "authValid=true")
+    Log.i("INVOICE_AUTO_SYNC", "syncStarted=true")
+    val script = """
+        (function() {
+          try {
+            // Preferência: função AJAX já usada pela Central.
+            try {
+              if (typeof hs_web !== 'undefined' && hs_web && typeof hs_web.buscarFaturas === 'function') {
+                hs_web.buscarFaturas(2000000000, true, '', true);
+                return 'hs_web';
+              }
+            } catch (e0) {}
+            try {
+              if (typeof HotsiteWeb !== 'undefined') {
+                new HotsiteWeb().buscarFaturas(2000000000, true, '', true);
+                return 'HotsiteWeb';
+              }
+            } catch (e1) {}
+            // Fallback: mesma rota getFaturas, sessão da WebView (cookies).
+            var base = '';
+            try {
+              if (typeof __SERVER__ !== 'undefined' && __SERVER__) base = String(__SERVER__);
+            } catch (e2) {}
+            if (!base) {
+              try {
+                var path = location.pathname || '';
+                var idx = path.indexOf('/central_assinante_web');
+                base = location.origin + (idx >= 0 ? path.substring(0, idx + '/central_assinante_web'.length) : '/central_assinante_web');
+              } catch (e3) {
+                base = location.origin + '/central_assinante_web';
+              }
+            }
+            var url = base.replace(/\/${'$'}/, '') +
+              '/model/faturas/faturas.php?SLICE=2000000000&HOME=false&ACTION=getFaturas';
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.send();
+            return 'xhr';
+          } catch (e) {
+            return 'error:' + String(e);
+          }
+        })();
+    """.trimIndent()
+    webView.evaluateJavascript(script) { result ->
+        val normalized = result?.trim()?.trim('"').orEmpty()
+        if (normalized.startsWith("error")) {
+            Log.i("INVOICE_AUTO_SYNC", "trigger=$trigger")
+            Log.i("INVOICE_AUTO_SYNC", "syncFailed=true")
+        } else {
+            Log.i("INVOICE_AUTO_SYNC", "trigger=$trigger method=$normalized")
+        }
+    }
+}
+
+/**
+ * Hook passivo XHR/fetch: captura resposta getFaturas sem alterar request/response.
+ * Idempotente por document.
+ */
+private fun injectInvoiceCaptureHook(webView: WebView) {
+    val script = """
+        (function() {
+          try {
+            if (window.__alfatechInvoiceHookInstalled) return 'already';
+            window.__alfatechInvoiceHookInstalled = true;
+            function isGetFaturasUrl(u) {
+              u = String(u || '');
+              return u.indexOf('faturas.php') >= 0 && u.indexOf('getFaturas') >= 0;
+            }
+            function deliver(text) {
+              try {
+                if (!text || !window.AndroidBridge || typeof AndroidBridge.onInvoicesJson !== 'function') return;
+                AndroidBridge.onInvoicesJson(String(text));
+              } catch (e) {}
+            }
+            var open = XMLHttpRequest.prototype.open;
+            var send = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function(method, url) {
+              try { this.__alfInvoiceUrl = url; } catch (e1) {}
+              return open.apply(this, arguments);
+            };
+            XMLHttpRequest.prototype.send = function(body) {
+              try {
+                this.addEventListener('load', function() {
+                  try {
+                    if (isGetFaturasUrl(this.__alfInvoiceUrl)) {
+                      deliver(this.responseText);
+                    }
+                  } catch (e2) {}
+                });
+              } catch (e3) {}
+              return send.apply(this, arguments);
+            };
+            if (window.fetch) {
+              var originalFetch = window.fetch;
+              window.fetch = function(input, init) {
+                var url = '';
+                try {
+                  url = (typeof input === 'string') ? input : (input && input.url) ? input.url : '';
+                } catch (e4) {}
+                return originalFetch.apply(this, arguments).then(function(resp) {
+                  try {
+                    if (isGetFaturasUrl(url)) {
+                      resp.clone().text().then(function(t) { deliver(t); }).catch(function(){});
+                    }
+                  } catch (e5) {}
+                  return resp;
+                });
+              };
+            }
+            return 'ok';
+          } catch (e) {
+            return 'error';
+          }
+        })();
+    """.trimIndent()
+    webView.evaluateJavascript(script) { result ->
+        Log.i("INVOICE_SYNC", "hookInject result=${result ?: "null"}")
+    }
+}
 
 /**
  * Reexecuta as capturas já existentes (WhatsApp DOM + perfil storage).
@@ -1069,7 +1253,8 @@ class FcmBridgeController {
 
 class WebAppInterface(
     private val context: Context,
-    private val bridgeController: FcmBridgeController
+    private val bridgeController: FcmBridgeController,
+    private val onInvoicesJsonReceived: (String) -> Unit = {}
 ) {
     @JavascriptInterface
     fun getFcmToken(): String {
@@ -1081,6 +1266,21 @@ class WebAppInterface(
     fun showToast(message: String) {
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Recebe JSON estruturado de getFaturas (hook XHR/fetch — sem alterar a resposta).
+     */
+    @JavascriptInterface
+    fun onInvoicesJson(json: String) {
+        if (json.isBlank()) return
+        android.util.Log.i(
+            "INVOICE_SYNC",
+            "bridge onInvoicesJson bytes=${json.length}"
+        )
+        Handler(Looper.getMainLooper()).post {
+            onInvoicesJsonReceived.invoke(json)
         }
     }
 

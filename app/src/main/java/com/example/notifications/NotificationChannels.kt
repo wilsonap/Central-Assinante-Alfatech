@@ -19,6 +19,9 @@ object NotificationChannels {
 
     const val CHANNEL_CENTRAL = "central_alfatech_channel"
     const val CHANNEL_DEFAULT = "default"
+    const val CHANNEL_INVOICES = "invoice_reminders_channel"
+    /** Preparado para futura notificação com app fechado (Fase 2). */
+    const val CHANNEL_APP_UPDATES = "app_updates_channel"
 
     private const val TAG = "FCM_CHANNELS"
 
@@ -49,9 +52,23 @@ object NotificationChannels {
             }
         )
 
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_INVOICES, "Lembretes de faturas", importance).apply {
+                this.description = "Avisos de vencimento de faturas Alfatech"
+                enableVibration(true)
+            }
+        )
+
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_APP_UPDATES, "Atualizações do aplicativo", importance).apply {
+                this.description = "Avisos quando houver nova versão do aplicativo Alfatech"
+                enableVibration(true)
+            }
+        )
+
         Log.i(
             TAG,
-            "channels ready: $CHANNEL_CENTRAL + $CHANNEL_DEFAULT (importance=HIGH)"
+            "channels ready: $CHANNEL_CENTRAL + $CHANNEL_DEFAULT + $CHANNEL_INVOICES + $CHANNEL_APP_UPDATES"
         )
     }
 }

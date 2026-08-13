@@ -1,11 +1,20 @@
 package com.example.ui
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.PushNotificationRepository
 import com.example.data.local.AppDatabase
+import com.example.data.local.InvoiceEntity
 import com.example.data.local.NotificationEntity
+import com.example.invoice.InvoiceReminderPrefs
+import com.example.invoice.InvoiceRepository
+import com.example.offline.OfflineStartup
 import com.example.service.FcmTokenStore
 import com.example.ui.components.FcmBridgeController
 import com.google.firebase.messaging.FirebaseMessaging
@@ -17,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -24,6 +34,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
     private val notificationDao = db.notificationDao()
     private val receiptHistoryDao = db.receiptHistoryDao()
+    private val invoiceRepository = InvoiceRepository(application)
 
     val notifications: StateFlow<List<NotificationEntity>> = notificationDao.getAllNotifications()
         .stateIn(
@@ -39,6 +50,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList()
             )
+
+    val invoices: StateFlow<List<InvoiceEntity>> = invoiceRepository.observeAll()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    private val _invoicesLastSyncedAt = MutableStateFlow<Long?>(null)
+    val invoicesLastSyncedAt: StateFlow<Long?> = _invoicesLastSyncedAt.asStateFlow()
+
+    val remindDayBefore: StateFlow<Boolean> = InvoiceReminderPrefs.remindDayBefore
+    val remindDueDate: StateFlow<Boolean> = InvoiceReminderPrefs.remindDueDate
 
     private val _receiptStorageCount = MutableStateFlow(0)
     val receiptStorageCount: StateFlow<Int> = _receiptStorageCount.asStateFlow()
@@ -74,7 +98,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val showReceiptHistory: StateFlow<Boolean> = _showReceiptHistory.asStateFlow()
 
 
-    // 0 = Home Screen (Native), 1 = WebView Screen
+    // 0 = Home, 1 = WebView Central, 2 = Faturas nativas (Room)
     private val _currentScreen = MutableStateFlow(1)
     val currentScreen: StateFlow<Int> = _currentScreen.asStateFlow()
 
@@ -93,20 +117,189 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
+    /** Offline sem nenhuma sessão/dado local prévio — não entra em loop na WebView. */
+    private val _needsFirstOnlineAuth = MutableStateFlow(false)
+    val needsFirstOnlineAuth: StateFlow<Boolean> = _needsFirstOnlineAuth.asStateFlow()
+
+    /** Pedido para recarregar a Central em background ao voltar a internet. */
+    private val _centralReloadRequest = MutableStateFlow(0L)
+    val centralReloadRequest: StateFlow<Long> = _centralReloadRequest.asStateFlow()
+
+    /** Pedido de sync automático de faturas (id + trigger). */
+    private val _autoInvoiceSyncSignal = MutableStateFlow<Pair<Long, String>?>(null)
+    val autoInvoiceSyncSignal: StateFlow<Pair<Long, String>?> = _autoInvoiceSyncSignal.asStateFlow()
+
+    private var pendingAutoInvoiceSyncTrigger: String? = null
+
+    private var startedOfflineWithLocalData = false
+
     /**
      * Evita loop: Home automática só na transição não autenticado → autenticado,
      * uma vez por ciclo de sessão. Reset ao voltar para tela de login IXC.
      */
     private val postLoginHomeHandled = AtomicBoolean(false)
 
+    private val connectivityManager =
+        application.getSystemService(ConnectivityManager::class.java)
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            viewModelScope.launch(Dispatchers.Main) {
+                onNetworkBecameAvailable()
+            }
+        }
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                viewModelScope.launch(Dispatchers.Main) {
+                    onNetworkBecameAvailable()
+                }
+            }
+        }
+    }
+
     init {
+        InvoiceReminderPrefs.hydrate(application)
         retrieveFcmToken()
         refreshReceiptStorageStats()
+        refreshInvoicesLastSync()
+        evaluateOfflineStartup()
+        registerNetworkCallback()
+    }
+
+    override fun onCleared() {
+        try {
+            connectivityManager?.unregisterNetworkCallback(networkCallback)
+        } catch (_: Exception) {
+        }
+        super.onCleared()
+    }
+
+    /**
+     * Se offline com dados/sessão local → Home nativa.
+     * Se offline sem histórico → aviso de primeira autenticação.
+     * Online → fluxo WebView/login atual (não altera).
+     */
+    private fun evaluateOfflineStartup() {
+        val app = getApplication<Application>()
+        val networkAvailable = OfflineStartup.isNetworkAvailable(app)
+        val cookieSession = OfflineStartup.hasCookieSession(baseUrl)
+        val hadAuth = OfflineStartup.hadAuthenticatedSession(app)
+        val localSessionAvailable = cookieSession || hadAuth
+        val (invoiceCount, receiptCount) = runBlocking(Dispatchers.IO) {
+            db.invoiceDao().count() to receiptHistoryDao.count()
+        }
+        val localDataAvailable =
+            invoiceCount > 0 || receiptCount > 0 || localSessionAvailable
+
+        if (!networkAvailable && localDataAvailable) {
+            startedOfflineWithLocalData = true
+            _needsFirstOnlineAuth.value = false
+            _isLoggedIn.value = true
+            postLoginHomeHandled.set(true)
+            _currentScreen.value = 0
+            _selectedTab.value = 0
+            OfflineStartup.logDecision(
+                networkAvailable = false,
+                localSessionAvailable = localSessionAvailable,
+                localDataAvailable = true,
+                navigateHomeOffline = true
+            )
+            return
+        }
+
+        if (!networkAvailable && !localDataAvailable) {
+            _needsFirstOnlineAuth.value = true
+            _isLoggedIn.value = false
+            _currentScreen.value = 0
+            OfflineStartup.logDecision(
+                networkAvailable = false,
+                localSessionAvailable = false,
+                localDataAvailable = false,
+                navigateHomeOffline = false
+            )
+            return
+        }
+
+        OfflineStartup.logDecision(
+            networkAvailable = true,
+            localSessionAvailable = localSessionAvailable,
+            localDataAvailable = localDataAvailable,
+            navigateHomeOffline = false
+        )
+    }
+
+    private fun registerNetworkCallback() {
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        try {
+            connectivityManager?.registerNetworkCallback(request, networkCallback)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun onNetworkBecameAvailable() {
+        if (_needsFirstOnlineAuth.value) {
+            // Usuário ainda na tela de "precisa autenticar uma vez" — não forçar login automático.
+            return
+        }
+        val app = getApplication<Application>()
+        val hasSession = OfflineStartup.hasCookieSession(baseUrl) ||
+            OfflineStartup.hadAuthenticatedSession(app)
+        if (startedOfflineWithLocalData) {
+            startedOfflineWithLocalData = false
+            android.util.Log.i("OFFLINE_STARTUP", "networkAvailable=true recovery=reload_central")
+            // Reutiliza cookies/sessão; sync virá no session_restored após o reload.
+            _centralReloadRequest.value = System.currentTimeMillis()
+            return
+        }
+        if (hasSession) {
+            // App já estava em memória: sync forçado sem exigir abrir Faturas.
+            requestAutoInvoiceSync("network_recovered")
+        }
+    }
+
+    fun requestAutoInvoiceSync(trigger: String) {
+        _autoInvoiceSyncSignal.value = System.currentTimeMillis() to trigger
+    }
+
+    fun onAutoInvoiceSyncStarted(trigger: String) {
+        pendingAutoInvoiceSyncTrigger = trigger
+    }
+
+    /** Retry da tela de primeira autenticação quando o usuário recupera internet. */
+    fun retryFirstOnlineAuth() {
+        val online = OfflineStartup.isNetworkAvailable(getApplication())
+        android.util.Log.i("OFFLINE_STARTUP", "networkAvailable=$online retryFirstOnlineAuth")
+        if (!online) {
+            Toast.makeText(
+                getApplication(),
+                "Sem conexão. Conecte-se à internet para autenticar.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        _needsFirstOnlineAuth.value = false
+        _currentScreen.value = 1
+        _currentUrl.value = baseUrl
+        _centralReloadRequest.value = System.currentTimeMillis()
+    }
+
+    private fun requireOnlineForCentral(): Boolean {
+        if (OfflineStartup.isNetworkAvailable(getApplication())) return true
+        Toast.makeText(getApplication(), "Sem conexão", Toast.LENGTH_SHORT).show()
+        return false
     }
 
     fun onUrlChanged(newUrl: String) {
         _currentUrl.value = newUrl
+        // Offline: falha de rede NÃO invalida sessão local.
+        if (!OfflineStartup.isNetworkAvailable(getApplication())) {
+            return
+        }
         if (FcmBridgeController.isAuthBlockedUrl(newUrl)) {
+            pendingAutoInvoiceSyncTrigger = null
             if (postLoginHomeHandled.getAndSet(false)) {
                 android.util.Log.i(
                     "CENTRAL_POST_LOGIN",
@@ -138,6 +331,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.i("CENTRAL_POST_LOGIN", "navigate_skipped=already_handled")
             return
         }
+        OfflineStartup.markAuthenticatedSession(getApplication())
+        _needsFirstOnlineAuth.value = false
         _isLoggedIn.value = true
         android.util.Log.i("CENTRAL_POST_LOGIN", "navigate_to_home=true")
         navigateToHome()
@@ -215,7 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 navigateToHome()
             }
             1 -> {
-                openCentral("${baseUrl}faturas", "Faturas", selectedTabValue = 1)
+                navigateToInvoices()
             }
             2 -> {
                 openCentral("${baseUrl}atendimentos", "Suporte / Atendimento", selectedTabValue = 2)
@@ -226,16 +421,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun navigateToInvoices() {
+        _isLoggedIn.value = true
+        _selectedTab.value = 1
+        _currentScreen.value = 2
+        _currentTitle.value = "Faturas"
+        refreshInvoicesLastSync()
+        android.util.Log.i("CENTRAL_NAV", "navigateToInvoices")
+    }
+
+    fun openCentralInvoices() {
+        openCentral("${baseUrl}faturas", "Faturas", selectedTabValue = 1)
+    }
+
     fun navigateToShortcut(path: String, title: String) {
         _isLoggedIn.value = true
+        if (path == "faturas") {
+            navigateToInvoices()
+            return
+        }
         val targetUrl = if (path.isBlank()) baseUrl else if (path.startsWith("http")) path else "${baseUrl}$path"
         val tab = when (path) {
-            "faturas" -> 1
             "atendimentos" -> 2
             "dados_cliente" -> 3
             else -> -1
         }
         openCentral(targetUrl, title, selectedTabValue = tab)
+    }
+
+    fun onInvoicesJsonCaptured(rawJson: String) {
+        viewModelScope.launch {
+            val autoTrigger = pendingAutoInvoiceSyncTrigger
+            try {
+                val count = invoiceRepository.syncFromGetFaturasJson(rawJson)
+                if (autoTrigger != null) {
+                    android.util.Log.i("INVOICE_AUTO_SYNC", "trigger=$autoTrigger")
+                    android.util.Log.i("INVOICE_AUTO_SYNC", "syncFinished=true")
+                    android.util.Log.i("INVOICE_AUTO_SYNC", "invoiceCount=$count")
+                    pendingAutoInvoiceSyncTrigger = null
+                }
+                // Reagenda lembretes após sync bem-sucedida (mesmo com 0 itens novos).
+                com.example.invoice.InvoiceReminderScheduler.schedulePeriodic(getApplication())
+                refreshInvoicesLastSync()
+            } catch (e: Exception) {
+                if (autoTrigger != null) {
+                    android.util.Log.i("INVOICE_AUTO_SYNC", "trigger=$autoTrigger")
+                    android.util.Log.i("INVOICE_AUTO_SYNC", "syncFailed=true")
+                    pendingAutoInvoiceSyncTrigger = null
+                }
+                // Mantém Room antigo; não trata como logout.
+            }
+        }
+    }
+
+    fun setRemindDayBefore(enabled: Boolean) {
+        InvoiceReminderPrefs.setRemindDayBefore(getApplication(), enabled)
+    }
+
+    fun setRemindDueDate(enabled: Boolean) {
+        InvoiceReminderPrefs.setRemindDueDate(getApplication(), enabled)
+    }
+
+    private fun refreshInvoicesLastSync() {
+        viewModelScope.launch {
+            _invoicesLastSyncedAt.value = invoiceRepository.latestSyncAt()
+        }
     }
 
     fun navigateToHome() {
@@ -246,6 +496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openCentral(url: String, title: String, selectedTabValue: Int) {
+        if (!requireOnlineForCentral()) return
         val prev = screenLabel(_currentScreen.value)
         _currentUrl.value = url
         _currentTitle.value = title
@@ -254,7 +505,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         android.util.Log.i("CENTRAL_NAV", "openCentral $prev -> CENTRAL url=$url")
     }
 
-    private fun screenLabel(screen: Int): String = if (screen == 1) "CENTRAL" else "HOME"
+    private fun screenLabel(screen: Int): String = when (screen) {
+        1 -> "CENTRAL"
+        2 -> "INVOICES"
+        else -> "HOME"
+    }
 
     /**
      * True when the WebView URL is the Central root (or logged-in landing),
