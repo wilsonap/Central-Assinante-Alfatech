@@ -73,11 +73,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import com.example.battery.BatteryOptimizationAssistant
 import com.example.notifications.NotificationChannels
 import com.example.offline.OfflineStartup
 import com.example.ui.MainViewModel
 import com.example.ui.WhatsAppSupport
 import com.example.ui.components.CentralWebView
+import com.example.ui.screens.BatteryOptimizationPromptDialog
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NeedsFirstOnlineAuthScreen
 import com.example.ui.screens.NotificationsScreen
@@ -300,6 +302,7 @@ fun AlfatechMainApp(
     val autoInvoiceSyncSignal by viewModel.autoInvoiceSyncSignal.collectAsState()
 
     var showNotificationsSheet by remember { mutableStateOf(false) }
+    var showBatteryOptPrompt by remember { mutableStateOf(false) }
 
     // Request Android 13+ Notification Permission
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -307,6 +310,10 @@ fun AlfatechMainApp(
     ) { _ -> }
 
     LaunchedEffect(Unit) {
+        BatteryOptimizationAssistant.logStatus(context)
+        if (BatteryOptimizationAssistant.shouldShowPrompt(context)) {
+            showBatteryOptPrompt = true
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     context,
@@ -316,6 +323,20 @@ fun AlfatechMainApp(
                 permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+    }
+
+    if (showBatteryOptPrompt) {
+        BatteryOptimizationPromptDialog(
+            onAllowBackground = {
+                BatteryOptimizationAssistant.markPromptAcknowledged(context)
+                showBatteryOptPrompt = false
+                BatteryOptimizationAssistant.openBackgroundSettings(context)
+            },
+            onDismiss = {
+                BatteryOptimizationAssistant.markPromptAcknowledged(context)
+                showBatteryOptPrompt = false
+            }
+        )
     }
 
     // Ao abrir Avisos e Comunicados, zera o badge do sino

@@ -462,6 +462,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Reagenda lembretes após sync bem-sucedida (mesmo com 0 itens novos).
                 com.example.invoice.InvoiceReminderScheduler.schedulePeriodic(getApplication())
+                withContext(Dispatchers.IO) {
+                    com.example.invoice.InvoiceReminderChecker.run(
+                        getApplication(),
+                        trigger = "invoice_sync"
+                    )
+                }
                 refreshInvoicesLastSync()
             } catch (e: Exception) {
                 if (autoTrigger != null) {
