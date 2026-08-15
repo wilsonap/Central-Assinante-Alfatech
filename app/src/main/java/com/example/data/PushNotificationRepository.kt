@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.data.local.AppDatabase
 import com.example.data.local.NotificationEntity
+import com.example.invoice.InvoiceReminderPrefs
 import java.security.MessageDigest
 
 /**
@@ -14,6 +15,12 @@ object PushNotificationRepository {
 
     private const val TAG = "FCM_PERSIST"
     private const val DEDUPE_WINDOW_MS = 120_000L // 2 minutos
+
+    /** Tipo/source no Room para lembretes locais de fatura. */
+    const val TYPE_INVOICE_REMINDER = "INVOICE_REMINDER"
+
+    /** Sentinel para abrir a tela nativa de Faturas (não WebView). */
+    const val NATIVE_INVOICES_TARGET = "native://invoices"
 
     /**
      * @return true se inseriu, false se ignorou (duplicata / conteúdo vazio)
@@ -72,6 +79,38 @@ object PushNotificationRepository {
             "inserted id=$rowId messageId=$mid type=$resolvedType hasUrl=${url != null}"
         )
         return true
+    }
+
+    /**
+     * Persiste lembrete local no histórico do sino.
+     * [dedupeKey] = invoice_[id]_day_before|due_date_[dueDate] (único via messageId).
+     * Sem valor, CPF ou dados sensíveis.
+     */
+    suspend fun persistInvoiceReminder(
+        context: Context,
+        dedupeKey: String,
+        kind: String
+    ): Boolean {
+        val title: String
+        val body: String
+        when (kind) {
+            InvoiceReminderPrefs.KIND_DAY_BEFORE -> {
+                title = "Fatura vence amanhã"
+                body = "Sua fatura vence amanhã. Acesse Faturas para consultar os detalhes."
+            }
+            else -> {
+                title = "Fatura vence hoje"
+                body = "Sua fatura vence hoje. Acesse Faturas para consultar os detalhes."
+            }
+        }
+        return persistFromPush(
+            context = context,
+            title = title,
+            body = body,
+            type = TYPE_INVOICE_REMINDER,
+            messageId = dedupeKey,
+            targetUrl = NATIVE_INVOICES_TARGET
+        )
     }
 
     private fun sha256Hex(value: String): String {

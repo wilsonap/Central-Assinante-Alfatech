@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.branding.CompanyLogoStore
 import com.example.data.PushNotificationRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.InvoiceEntity
@@ -160,11 +161,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         InvoiceReminderPrefs.hydrate(application)
+        CompanyLogoStore.hydrate(application)
         retrieveFcmToken()
         refreshReceiptStorageStats()
         refreshInvoicesLastSync()
         evaluateOfflineStartup()
         registerNetworkCallback()
+    }
+
+    val companyLogoUrl: StateFlow<String?> = CompanyLogoStore.localLogoPath
+
+    fun onCompanyLogoCaptured(url: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            CompanyLogoStore.updateFromCentral(getApplication(), url)
+        }
     }
 
     override fun onCleared() {
@@ -460,7 +470,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("INVOICE_AUTO_SYNC", "invoiceCount=$count")
                     pendingAutoInvoiceSyncTrigger = null
                 }
-                // Reagenda lembretes após sync bem-sucedida (mesmo com 0 itens novos).
+                // Fallback WorkManager 12h + check imediato pós-sync (dedupe compartilhada).
                 com.example.invoice.InvoiceReminderScheduler.schedulePeriodic(getApplication())
                 withContext(Dispatchers.IO) {
                     com.example.invoice.InvoiceReminderChecker.run(
@@ -555,6 +565,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAllNotifications() {
         viewModelScope.launch {
             notificationDao.clearAll()
+        }
+    }
+
+    /**
+     * Toque no histórico do sino.
+     * INVOICE_REMINDER → tela nativa de Faturas (sem WebView).
+     * Demais → mantém comportamento atual (só marca lida; URL via setTargetUrl se houver).
+     */
+    fun onNotificationHistoryClick(notification: NotificationEntity) {
+        viewModelScope.launch {
+            notificationDao.markAsRead(notification.id)
+        }
+        val isInvoice =
+            notification.type == PushNotificationRepository.TYPE_INVOICE_REMINDER ||
+                notification.targetUrl == PushNotificationRepository.NATIVE_INVOICES_TARGET
+        if (isInvoice) {
+            navigateToInvoices()
+            return
+        }
+        val url = notification.targetUrl?.trim().orEmpty()
+        if (url.isNotEmpty() && !url.startsWith("native://")) {
+            setTargetUrl(url)
         }
     }
 

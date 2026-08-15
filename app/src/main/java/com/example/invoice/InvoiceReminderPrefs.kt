@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Preferências de lembrete de faturas (padrão: ambos ligados).
+ * Preferências de lembrete de faturas (padrão: ambos ligados) + dedupe fired.
  */
 object InvoiceReminderPrefs {
     private const val PREFS = "invoice_reminder_prefs"

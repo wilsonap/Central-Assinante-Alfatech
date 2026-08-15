@@ -73,12 +73,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.battery.BatteryOptimizationAssistant
+import com.example.invoice.InvoiceReminderChecker
 import com.example.notifications.NotificationChannels
 import com.example.offline.OfflineStartup
 import com.example.ui.MainViewModel
 import com.example.ui.WhatsAppSupport
 import com.example.ui.components.CentralWebView
+import com.example.ui.components.CompanyLogoImage
 import com.example.ui.screens.BatteryOptimizationPromptDialog
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NeedsFirstOnlineAuthScreen
@@ -86,12 +89,17 @@ import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.ReceiptSenderScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.update.InAppUpdateCoordinator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private var activeWebView: WebView? = null
     private lateinit var inAppUpdateCoordinator: InAppUpdateCoordinator
+    /** Evita múltiplos checks no mesmo ciclo de Activity (onStart repetido). */
+    private val invoiceImmediateCheckStarted = AtomicBoolean(false)
 
     /**
      * Activity-level back callback kept at the top of the dispatcher so Chromium WebView
@@ -136,6 +144,27 @@ class MainActivity : ComponentActivity() {
                     webViewGoBack = { activeWebView?.goBack() },
                     onReassertBack = { reassertBackCallback() }
                 )
+            }
+        }
+
+        // Check imediato SOMENTE com Activity real (não em Application/WorkManager).
+        if (invoiceImmediateCheckStarted.compareAndSet(false, true)) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    InvoiceReminderChecker.run(this@MainActivity, trigger = "app_start")
+                    if (InvoiceReminderChecker.channelNeedsUserAttention) {
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Ative o canal \"Lembretes de faturas\" nas configurações de notificação.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            InvoiceReminderChecker.openInvoiceChannelSettings(this@MainActivity)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Não bloqueia a UI.
+                }
             }
         }
     }
@@ -297,6 +326,7 @@ fun AlfatechMainApp(
     val invoicesLastSyncedAt by viewModel.invoicesLastSyncedAt.collectAsState()
     val remindDayBefore by viewModel.remindDayBefore.collectAsState()
     val remindDueDate by viewModel.remindDueDate.collectAsState()
+    val companyLogoUrl by viewModel.companyLogoUrl.collectAsState()
     val needsFirstOnlineAuth by viewModel.needsFirstOnlineAuth.collectAsState()
     val centralReloadRequest by viewModel.centralReloadRequest.collectAsState()
     val autoInvoiceSyncSignal by viewModel.autoInvoiceSyncSignal.collectAsState()
@@ -393,24 +423,10 @@ fun AlfatechMainApp(
                             modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                             title = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.secondary),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (currentScreen == 2) {
-                                                Icons.Default.Receipt
-                                            } else {
-                                                Icons.Default.Wifi
-                                            },
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    CompanyLogoImage(
+                                        localLogoPath = companyLogoUrl,
+                                        size = 48.dp
+                                    )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
@@ -595,6 +611,9 @@ fun AlfatechMainApp(
                 onInvoicesJsonReceived = { json ->
                     viewModel.onInvoicesJsonCaptured(json)
                 },
+                onCompanyLogoFound = { logoUrl ->
+                    viewModel.onCompanyLogoCaptured(logoUrl)
+                },
                 autoInvoiceSyncSignal = autoInvoiceSyncSignal,
                 onAutoInvoiceSyncStarted = { trigger ->
                     viewModel.onAutoInvoiceSyncStarted(trigger)
@@ -701,7 +720,11 @@ fun AlfatechMainApp(
             ) {
                 NotificationsScreen(
                     notifications = notifications,
-                    onClearAll = { viewModel.clearAllNotifications() }
+                    onClearAll = { viewModel.clearAllNotifications() },
+                    onNotificationClick = { notification ->
+                        showNotificationsSheet = false
+                        viewModel.onNotificationHistoryClick(notification)
+                    }
                 )
             }
         }

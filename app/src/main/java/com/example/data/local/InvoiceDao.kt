@@ -38,6 +38,16 @@ interface InvoiceDao {
     )
     suspend fun findOpenByDueDate(dueDate: String): List<InvoiceEntity>
 
+    @Query(
+        """
+        SELECT * FROM invoices
+        WHERE IFNULL(sourceGroup, '') NOT IN ('pagas', 'canceladas')
+          AND status NOT IN ('P', 'C', 'R')
+        ORDER BY dueDate ASC
+        """
+    )
+    suspend fun getOpenInvoices(): List<InvoiceEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIgnore(entity: InvoiceEntity): Long
 

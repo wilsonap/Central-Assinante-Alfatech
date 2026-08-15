@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material3.Card
@@ -33,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.PushNotificationRepository
 import com.example.data.local.NotificationEntity
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -41,7 +44,8 @@ import java.util.Locale
 @Composable
 fun NotificationsScreen(
     notifications: List<NotificationEntity>,
-    onClearAll: () -> Unit
+    onClearAll: () -> Unit,
+    onNotificationClick: (NotificationEntity) -> Unit = {}
 ) {
     val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.forLanguageTag("pt-BR"))
 
@@ -116,9 +120,16 @@ fun NotificationsScreen(
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(notifications) { notification ->
+                items(notifications, key = { it.id }) { notification ->
+                    val isInvoice =
+                        notification.type == PushNotificationRepository.TYPE_INVOICE_REMINDER
+                    val sourceLabel = if (isInvoice) "Fatura" else "Central Alfatech"
+                    val icon = if (isInvoice) Icons.Default.Description else Icons.Default.Notifications
+
                     Card(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNotificationClick(notification) },
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface
@@ -133,13 +144,23 @@ fun NotificationsScreen(
                                 modifier = Modifier
                                     .size(40.dp)
                                     .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                    .background(
+                                        if (isInvoice) {
+                                            MaterialTheme.colorScheme.secondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        }
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Notifications,
+                                    imageVector = icon,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = if (isInvoice) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -147,6 +168,13 @@ fun NotificationsScreen(
                             Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = sourceLabel,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = notification.title,
                                     fontSize = 15.sp,

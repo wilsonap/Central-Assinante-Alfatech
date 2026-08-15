@@ -78,6 +78,8 @@ fun CentralWebView(
     onPostLoginReady: (trigger: String) -> Unit = {},
     /** JSON bruto da resposta IXC getFaturas (capturado via hook XHR/fetch). */
     onInvoicesJsonReceived: (String) -> Unit = {},
+    /** URL do logo da empresa capturada do DOM da Central. */
+    onCompanyLogoFound: (String) -> Unit = {},
     /** Pedido externo de sync (ex.: network_recovered). id muda a cada pedido. */
     autoInvoiceSyncSignal: Pair<Long, String>? = null,
     onAutoInvoiceSyncStarted: (trigger: String) -> Unit = {}
@@ -99,6 +101,8 @@ fun CentralWebView(
     val invoiceSyncHandled = remember { AtomicBoolean(false) }
     val invoicesCallbackRef = remember { AtomicReference(onInvoicesJsonReceived) }
     invoicesCallbackRef.set(onInvoicesJsonReceived)
+    val logoCallbackRef = remember { AtomicReference(onCompanyLogoFound) }
+    logoCallbackRef.set(onCompanyLogoFound)
 
     fun scheduleCustomerDataRefresh(
         webView: WebView,
@@ -289,6 +293,9 @@ fun CentralWebView(
                                 bridgeController = bridgeController,
                                 onInvoicesJsonReceived = { json ->
                                     invoicesCallbackRef.get()?.invoke(json)
+                                },
+                                companyLogoCallback = { logoUrl ->
+                                    logoCallbackRef.get()?.invoke(logoUrl)
                                 }
                             ),
                             "AndroidBridge"
@@ -395,6 +402,11 @@ fun CentralWebView(
                                     scheduleCustomerDataRefresh(view, trigger)
                                 }
                                 if (view != null) injectInvoiceCaptureHook(view)
+                                if (view != null && !FcmBridgeController.isAuthBlockedUrl(url)) {
+                                    // Logo pode aparecer um pouco depois do paint Vue — tenta agora e +1.5s.
+                                    injectCompanyLogoProbe(view)
+                                    view.postDelayed({ injectCompanyLogoProbe(view) }, 1500L)
+                                }
                             }
 
                             override fun onReceivedError(
@@ -1251,10 +1263,63 @@ class FcmBridgeController {
     }
 }
 
+private fun injectCompanyLogoProbe(webView: WebView) {
+    // Preferência: div.logo (background-image / Vue logo_base). Fallback: img*logo (sem pix/bancos).
+    val script = """
+        (function() {
+          try {
+            function absolutize(u) {
+              if (!u) return null;
+              if (String(u).indexOf('data:') === 0) return String(u);
+              try { return new URL(String(u), location.href).href; } catch (e) { return null; }
+            }
+            function fromBg(el) {
+              if (!el) return null;
+              var bg = '';
+              try { bg = window.getComputedStyle(el).backgroundImage || ''; } catch (e) {}
+              var m = bg && bg.match(/url\(["']?(.*?)["']?\)/i);
+              if (m && m[1] && m[1] !== 'none') return m[1];
+              return null;
+            }
+            var url = null;
+            try {
+              if (window.app && app.logo_base) url = app.logo_base;
+            } catch (e) {}
+            if (!url) {
+              var logoDiv = document.querySelector('div.logo');
+              url = fromBg(logoDiv);
+            }
+            if (!url) {
+              var imgs = document.querySelectorAll('.topbar img, img[src*="logo"]');
+              for (var i = 0; i < imgs.length; i++) {
+                var s = imgs[i].getAttribute('src') || '';
+                if (/logo_pix|bancos\//i.test(s)) continue;
+                if (/logo/i.test(s)) { url = s; break; }
+              }
+            }
+            if (!url) return 'none';
+            url = absolutize(url);
+            if (!url) return 'none';
+            if (window.AndroidBridge && typeof AndroidBridge.onCompanyLogoFound === 'function') {
+              AndroidBridge.onCompanyLogoFound(String(url));
+              return 'ok';
+            }
+            return 'no_bridge';
+          } catch (e) {
+            return 'err';
+          }
+        })();
+    """.trimIndent()
+    webView.evaluateJavascript(script) { result ->
+        Log.i("COMPANY_LOGO", "probeResult=$result")
+    }
+}
+
 class WebAppInterface(
     private val context: Context,
     private val bridgeController: FcmBridgeController,
-    private val onInvoicesJsonReceived: (String) -> Unit = {}
+    private val onInvoicesJsonReceived: (String) -> Unit = {},
+    private val companyLogoCallback: (String) -> Unit = {}
 ) {
     @JavascriptInterface
     fun getFcmToken(): String {
@@ -1281,6 +1346,14 @@ class WebAppInterface(
         )
         Handler(Looper.getMainLooper()).post {
             onInvoicesJsonReceived.invoke(json)
+        }
+    }
+
+    @JavascriptInterface
+    fun onCompanyLogoFound(url: String) {
+        if (url.isBlank() || url == "none") return
+        Handler(Looper.getMainLooper()).post {
+            companyLogoCallback.invoke(url)
         }
     }
 
