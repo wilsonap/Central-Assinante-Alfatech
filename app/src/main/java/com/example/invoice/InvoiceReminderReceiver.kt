@@ -31,6 +31,7 @@ class InvoiceReminderReceiver : BroadcastReceiver() {
             ?: intent.data?.pathSegments?.getOrNull(2)
 
         Log.i(TAG, "receiverStarted=true")
+        Log.i(TAG, "receivedAt=${System.currentTimeMillis()}")
         Log.i(TAG, "idReceber=${InvoiceParser.maskId(idReceber.orEmpty())}")
         Log.i(TAG, "kind=$kind")
 

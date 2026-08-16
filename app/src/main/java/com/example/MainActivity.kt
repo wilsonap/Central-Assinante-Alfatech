@@ -147,20 +147,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Check imediato SOMENTE com Activity real (não em Application/WorkManager).
+        // AlarmManager é o principal: app_start NÃO posta day_before/due_date.
         if (invoiceImmediateCheckStarted.compareAndSet(false, true)) {
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     InvoiceReminderChecker.run(this@MainActivity, trigger = "app_start")
-                    if (InvoiceReminderChecker.channelNeedsUserAttention) {
-                        launch(Dispatchers.Main) {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Ative o canal \"Lembretes de faturas\" nas configurações de notificação.",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            InvoiceReminderChecker.openInvoiceChannelSettings(this@MainActivity)
-                        }
+                    if (BuildConfig.DEBUG) {
+                        // TEMPORÁRIO: mesmo Receiver, +5 min (remover após validar).
+                        com.example.invoice.InvoiceAlarmScheduler
+                            .scheduleDebugAlarmInFiveMinutes(this@MainActivity)
                     }
                 } catch (_: Exception) {
                     // Não bloqueia a UI.

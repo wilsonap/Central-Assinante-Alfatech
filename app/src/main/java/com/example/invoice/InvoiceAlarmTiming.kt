@@ -1,20 +1,24 @@
 package com.example.invoice
 
 import com.example.data.local.InvoiceEntity
-import java.util.Calendar
-import java.util.Locale
 import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 /**
- * Janela de lembrete: 11:00–13:00 no dia-alvo (não exato).
+ * Trigger de lembrete: 12:00 local no dia-alvo (setAndAllowWhileIdle).
+ * Após 13:00 do dia-alvo → não agenda (sem retroativo).
  */
 object InvoiceAlarmTiming {
 
-    const val WINDOW_START_HOUR = 11
-    const val WINDOW_END_HOUR = 13
-    const val WINDOW_LENGTH_MS = 2L * 60L * 60L * 1000L
+    const val TRIGGER_HOUR = 12
+    const val CUTOFF_HOUR = 13
+    /** Se já passou das 12:00 e ainda < 13:00, agenda daqui a poucos minutos. */
+    const val SOON_DELAY_MS = 3L * 60L * 1000L
 
     private val iso = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val localStamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US)
 
     fun parseIsoDate(dueDate: String): Calendar? {
         return try {
@@ -33,6 +37,8 @@ object InvoiceAlarmTiming {
 
     fun formatIso(cal: Calendar): String = iso.format(cal.time)
 
+    fun formatTriggerLocal(millis: Long): String = localStamp.format(Date(millis))
+
     /** Dia do aviso: dueDate − 1 dia (day_before) ou dueDate (due_date). */
     fun alarmTargetDate(dueDate: String, kind: String): String? {
         val due = parseIsoDate(dueDate) ?: return null
@@ -47,32 +53,36 @@ object InvoiceAlarmTiming {
     }
 
     /**
-     * @return Pair(windowStartMillis, windowLengthMillis) ou null se já passou de 13:00 do dia-alvo.
+     * @return triggerAtMillis (RTC) ou null se já passou de 13:00 do dia-alvo.
+     *
+     * - antes de 12:00 → 12:00
+     * - entre 12:00 e 13:00 → agora + [SOON_DELAY_MS] (se ainda < 13:00)
+     * - após 13:00 → null
      */
-    fun computeWindow(
+    fun computeTriggerAt(
         targetDateIso: String,
         nowMillis: Long = System.currentTimeMillis()
-    ): Pair<Long, Long>? {
+    ): Long? {
         val day = parseIsoDate(targetDateIso) ?: return null
-        val windowStart = (day.clone() as Calendar).apply {
-            set(Calendar.HOUR_OF_DAY, WINDOW_START_HOUR)
+        val noon = (day.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, TRIGGER_HOUR)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        val windowEnd = (day.clone() as Calendar).apply {
-            set(Calendar.HOUR_OF_DAY, WINDOW_END_HOUR)
+        val cutoff = (day.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, CUTOFF_HOUR)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
-        if (nowMillis >= windowEnd) return null
+        if (nowMillis >= cutoff) return null
+        if (nowMillis < noon) return noon
 
-        val start = maxOf(windowStart, nowMillis)
-        val length = windowEnd - start
-        if (length <= 0L) return null
-        return start to length
+        val soon = nowMillis + SOON_DELAY_MS
+        if (soon >= cutoff) return null
+        return soon
     }
 
     fun isOpenInvoice(invoice: InvoiceEntity): Boolean = !isTerminalInvoice(invoice)

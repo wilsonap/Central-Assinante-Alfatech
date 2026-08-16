@@ -470,14 +470,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("INVOICE_AUTO_SYNC", "invoiceCount=$count")
                     pendingAutoInvoiceSyncTrigger = null
                 }
-                // Fallback WorkManager 12h + check imediato pós-sync (dedupe compartilhada).
+                // WorkManager fallback 12h; alarmes já criados no InvoiceRepository.
+                // invoice_sync NÃO posta day_before/due_date (não consome fired).
                 com.example.invoice.InvoiceReminderScheduler.schedulePeriodic(getApplication())
-                withContext(Dispatchers.IO) {
-                    com.example.invoice.InvoiceReminderChecker.run(
-                        getApplication(),
-                        trigger = "invoice_sync"
-                    )
-                }
+                android.util.Log.i("INVOICE_REMINDER", "trigger=invoice_sync")
+                android.util.Log.i("INVOICE_REMINDER", "action=schedule_only")
                 refreshInvoicesLastSync()
             } catch (e: Exception) {
                 if (autoTrigger != null) {

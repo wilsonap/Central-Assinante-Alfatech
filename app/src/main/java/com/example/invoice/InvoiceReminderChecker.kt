@@ -39,25 +39,26 @@ object InvoiceReminderChecker {
         private set
 
     /**
-     * @param trigger app_start | invoice_sync | worker
+     * @param trigger app_start | invoice_sync | worker | worker_fallback
+     * app_start / invoice_sync: NÃO notificam (AlarmManager é principal).
+     * worker: só fallback após 13:00 se ainda wasFired=false.
      */
     suspend fun run(context: Context, trigger: String) = mutex.withLock {
         val appContext = context.applicationContext
-        if (trigger == "worker") {
+        Log.i(TAG, "trigger=$trigger")
+        if (trigger == "worker" || trigger == "worker_fallback") {
             Log.i(TAG, "workerStarted=true")
             InvoiceReminderDiagnostics.markWorkerRun(appContext)
-        } else {
-            Log.i(TAG, "immediate_check_started trigger=$trigger")
         }
         InvoiceReminderDiagnostics.markCheck(appContext)
-
         NotificationChannels.ensureCreated(appContext)
 
         val iso = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val cal = Calendar.getInstance()
-        val today = iso.format(cal.time)
-        cal.add(Calendar.DAY_OF_YEAR, 1)
-        val tomorrow = iso.format(cal.time)
+        val nowCal = Calendar.getInstance()
+        val today = iso.format(nowCal.time)
+        val hour = nowCal.get(Calendar.HOUR_OF_DAY)
+        val tomorrowCal = (nowCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+        val tomorrow = iso.format(tomorrowCal.time)
         Log.i(TAG, "today=$today")
 
         val dao = AppDatabase.getDatabase(appContext).invoiceDao()
@@ -100,11 +101,45 @@ object InvoiceReminderChecker {
             logCandidate(inv, kind, eligible, already)
         }
 
-        candidates.forEach { (inv, kind) ->
-            maybeNotify(appContext, inv, kind, logTag = TAG)
+        when (trigger) {
+            "app_start" -> {
+                candidates.forEach { (inv, kind) ->
+                    Log.i(TAG, "trigger=app_start")
+                    Log.i(TAG, "action=no_notify_alarm_managed")
+                    Log.i(
+                        TAG,
+                        "idReceber=${InvoiceParser.maskId(inv.idReceber)} kind=$kind"
+                    )
+                }
+            }
+            "invoice_sync" -> {
+                Log.i(TAG, "trigger=invoice_sync")
+                Log.i(TAG, "action=schedule_only")
+            }
+            "worker", "worker_fallback" -> {
+                if (hour < InvoiceAlarmTiming.CUTOFF_HOUR) {
+                    Log.i(TAG, "trigger=worker_fallback")
+                    Log.i(TAG, "skipReason=waiting_for_alarm")
+                } else {
+                    candidates.forEach { (inv, kind) ->
+                        maybeNotify(
+                            context = appContext,
+                            invoice = inv,
+                            kind = kind,
+                            logTag = TAG,
+                            trigger = "worker_fallback",
+                            markFiredCaller = "InvoiceReminderWorker",
+                            isFallback = true
+                        )
+                    }
+                }
+            }
+            else -> {
+                Log.w(TAG, "unknown trigger=$trigger — no notify")
+            }
         }
 
-        if (trigger == "worker") {
+        if (trigger == "worker" || trigger == "worker_fallback") {
             Log.i(TAG, "workerFinished=true")
         }
     }
@@ -120,6 +155,7 @@ object InvoiceReminderChecker {
     ) = mutex.withLock {
         val appContext = context.applicationContext
         val alarmTag = "INVOICE_ALARM"
+        Log.i(TAG, "trigger=alarm")
         NotificationChannels.ensureCreated(appContext)
 
         val dao = AppDatabase.getDatabase(appContext).invoiceDao()
@@ -164,7 +200,15 @@ object InvoiceReminderChecker {
             return@withLock
         }
 
-        maybeNotify(appContext, invoice, kind, logTag = alarmTag)
+        maybeNotify(
+            context = appContext,
+            invoice = invoice,
+            kind = kind,
+            logTag = alarmTag,
+            trigger = "alarm",
+            markFiredCaller = "InvoiceReminderReceiver",
+            isFallback = false
+        )
     }
 
     fun openInvoiceChannelSettings(context: Context) {
@@ -210,10 +254,19 @@ object InvoiceReminderChecker {
         context: Context,
         invoice: InvoiceEntity,
         kind: String,
-        logTag: String
+        logTag: String,
+        trigger: String,
+        markFiredCaller: String,
+        isFallback: Boolean
     ) {
         val todayIsDue = kind == InvoiceReminderPrefs.KIND_DUE_DATE
         val kindLog = if (todayIsDue) "due_today" else "day_before"
+
+        Log.i(TAG, "trigger=$trigger")
+        if (isFallback) {
+            Log.i(TAG, "fallback=true")
+            Log.i(TAG, "fallbackReason=alarm_not_fired")
+        }
 
         if (InvoiceAlarmTiming.isTerminalInvoice(invoice)) {
             skip(context, "closed", notifyAttempt = false, logTag = logTag)
@@ -225,7 +278,7 @@ object InvoiceReminderChecker {
         val already = InvoiceReminderPrefs.wasFired(context, key)
         Log.i(logTag, "wasFired=$already")
         if (already) {
-            // Fired antes do histórico: backfill Room sem reenviar notificação Android.
+            // Compat: lembretes antigos sem histórico — backfill sem reenviar.
             ensureInvoiceHistoryEntry(
                 context = context,
                 dedupeKey = key,
@@ -310,6 +363,8 @@ object InvoiceReminderChecker {
                 backfill = false
             )
             InvoiceReminderPrefs.markFired(context, key)
+            Log.i(TAG, "markFiredCaller=$markFiredCaller")
+            Log.i(TAG, "markFiredKey=$key")
             Log.i(logTag, "markFired=true")
             Log.i(
                 logTag,
@@ -335,6 +390,7 @@ object InvoiceReminderChecker {
     ) {
         val histTag = "NOTIFICATION_HISTORY"
         Log.i(histTag, "key=$dedupeKey")
+        Log.i(histTag, "insertCaller=InvoiceReminderChecker.ensureInvoiceHistoryEntry")
         try {
             val dao = AppDatabase.getDatabase(context).notificationDao()
             val exists = dao.findByMessageId(dedupeKey) != null

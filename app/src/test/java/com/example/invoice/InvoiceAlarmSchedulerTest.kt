@@ -90,8 +90,15 @@ class InvoiceAlarmSchedulerTest {
         val due = InvoiceAlarmTiming.formatIso(tomorrow)
         val target = InvoiceAlarmTiming.alarmTargetDate(due, InvoiceReminderPrefs.KIND_DAY_BEFORE)
         assertEquals(InvoiceAlarmTiming.formatIso(cal), target)
-        val window = InvoiceAlarmTiming.computeWindow(target!!, cal.timeInMillis)
-        assertNotNull(window)
+        val trigger = InvoiceAlarmTiming.computeTriggerAt(target!!, cal.timeInMillis)
+        assertNotNull(trigger)
+        val noon = (cal.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, 12)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        assertEquals(noon, trigger)
     }
 
     @Test
@@ -105,7 +112,7 @@ class InvoiceAlarmSchedulerTest {
         val due = InvoiceAlarmTiming.formatIso(cal)
         val target = InvoiceAlarmTiming.alarmTargetDate(due, InvoiceReminderPrefs.KIND_DUE_DATE)
         assertEquals(due, target)
-        assertNotNull(InvoiceAlarmTiming.computeWindow(target!!, cal.timeInMillis))
+        assertNotNull(InvoiceAlarmTiming.computeTriggerAt(target!!, cal.timeInMillis))
     }
 
     @Test
@@ -117,7 +124,7 @@ class InvoiceAlarmSchedulerTest {
             set(Calendar.MILLISECOND, 0)
         }
         val due = InvoiceAlarmTiming.formatIso(cal)
-        assertNull(InvoiceAlarmTiming.computeWindow(due, cal.timeInMillis))
+        assertNull(InvoiceAlarmTiming.computeTriggerAt(due, cal.timeInMillis))
     }
 
     @Test

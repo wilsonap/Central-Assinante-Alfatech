@@ -13,8 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Agenda lembretes individuais por fatura via AlarmManager.setWindow (11h–13h).
- * Não usa alarmes exatos.
+ * Agenda lembretes individuais por fatura via AlarmManager.setAndAllowWhileIdle (12:00 local).
+ * Não usa setExact / setExactAndAllowWhileIdle / setAlarmClock.
  */
 object InvoiceAlarmScheduler {
 
@@ -61,29 +61,28 @@ object InvoiceAlarmScheduler {
     fun scheduleKind(context: Context, idReceber: String, kind: String, dueDate: String) {
         val appContext = context.applicationContext
         val target = InvoiceAlarmTiming.alarmTargetDate(dueDate, kind) ?: return
-        val window = InvoiceAlarmTiming.computeWindow(target) ?: run {
+        val triggerAt = InvoiceAlarmTiming.computeTriggerAt(target) ?: run {
             Log.i(
                 TAG,
-                "schedule skip pastWindow idReceber=${InvoiceParser.maskId(idReceber)} " +
+                "schedule skip pastCutoff idReceber=${InvoiceParser.maskId(idReceber)} " +
                     "kind=$kind dueDate=$dueDate target=$target"
             )
             return
         }
-        val (windowStart, windowLength) = window
-        val windowEnd = windowStart + windowLength
 
         val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pi = pendingIntent(appContext, idReceber, kind, dueDate, create = true)
             ?: return
 
-        am.setWindow(AlarmManager.RTC_WAKEUP, windowStart, windowLength, pi)
+        // API 23+ (minSdk 24). Inexact, mas permitido em idle/Doze — sem SCHEDULE_EXACT_ALARM.
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
 
-        Log.i(TAG, "schedule")
+        Log.i(TAG, "scheduleMethod=setAndAllowWhileIdle")
+        Log.i(TAG, "triggerAt=$triggerAt")
+        Log.i(TAG, "triggerLocal=${InvoiceAlarmTiming.formatTriggerLocal(triggerAt)}")
         Log.i(TAG, "idReceber=${InvoiceParser.maskId(idReceber)}")
         Log.i(TAG, "kind=$kind")
         Log.i(TAG, "dueDate=$dueDate")
-        Log.i(TAG, "windowStart=$windowStart")
-        Log.i(TAG, "windowEnd=$windowEnd")
     }
 
     fun cancelKind(context: Context, idReceber: String, kind: String, dueDate: String) {
@@ -146,6 +145,68 @@ object InvoiceAlarmScheduler {
         return PendingIntent.getBroadcast(context, rc, intent, flags)
     }
 
-    /** Visível para testes: flags de API / setWindow disponível. */
-    fun usesInexactWindow(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
+    fun usesAllowWhileIdle(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+
+    /**
+     * TEMPORÁRIO DEBUG: mesmo [InvoiceReminderReceiver], +5 minutos.
+     * Usa fatura aberta de hoje (due_date) ou amanhã (day_before).
+     */
+    suspend fun scheduleDebugAlarmInFiveMinutes(context: Context): Boolean =
+        withContext(Dispatchers.IO) {
+            if (!com.example.BuildConfig.DEBUG) return@withContext false
+            val appContext = context.applicationContext
+            val iso = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val cal = java.util.Calendar.getInstance()
+            val today = iso.format(cal.time)
+            cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+            val tomorrow = iso.format(cal.time)
+            val dao = AppDatabase.getDatabase(appContext).invoiceDao()
+            val dueToday = dao.findOpenByDueDate(today).firstOrNull()
+            val dueTomorrow = dao.findOpenByDueDate(tomorrow).firstOrNull()
+            val pair = when {
+                dueToday != null -> dueToday to InvoiceReminderPrefs.KIND_DUE_DATE
+                dueTomorrow != null -> dueTomorrow to InvoiceReminderPrefs.KIND_DAY_BEFORE
+                else -> null
+            }
+            if (pair == null) {
+                Log.w(TAG, "debugAlarm skip=no_open_invoice_today_or_tomorrow")
+                return@withContext false
+            }
+            val (inv, kind) = pair
+            val key = InvoiceReminderPrefs.notificationKey(inv.idReceber, kind, inv.dueDate)
+            // Limpa só a chave fired deste teste para permitir notify no Receiver.
+            appContext.getSharedPreferences("invoice_reminder_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .remove("fired_$key")
+                .apply()
+            Log.i(TAG, "debug_clear_fired key=fired_$key")
+
+            val triggerAt = System.currentTimeMillis() + 5L * 60L * 1000L
+            val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            // URI distinta evita que scheduleInvoice de produção dê REPLACE neste teste.
+            val intent = Intent(appContext, InvoiceReminderReceiver::class.java).apply {
+                action = ACTION_REMINDER
+                data = Uri.parse(
+                    "alfatech://invoice-reminder/${inv.idReceber}/$kind/${inv.dueDate}/debug5"
+                )
+                putExtra(EXTRA_ID_RECEBER, inv.idReceber)
+                putExtra(EXTRA_KIND, kind)
+                putExtra(EXTRA_DUE_DATE, inv.dueDate)
+            }
+            val rc = requestCode(appContext, inv.idReceber, kind, inv.dueDate) + 77_777
+            val pi = PendingIntent.getBroadcast(
+                appContext,
+                rc,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            Log.i(TAG, "scheduleMethod=setAndAllowWhileIdle")
+            Log.i(TAG, "debugTestScheduled=true delayMinutes=5")
+            Log.i(TAG, "triggerAt=$triggerAt")
+            Log.i(TAG, "triggerLocal=${InvoiceAlarmTiming.formatTriggerLocal(triggerAt)}")
+            Log.i(TAG, "idReceber=${InvoiceParser.maskId(inv.idReceber)}")
+            Log.i(TAG, "kind=$kind")
+            true
+        }
 }
