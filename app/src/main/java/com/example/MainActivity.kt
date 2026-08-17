@@ -152,11 +152,6 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     InvoiceReminderChecker.run(this@MainActivity, trigger = "app_start")
-                    if (BuildConfig.DEBUG) {
-                        // TEMPORÁRIO: mesmo Receiver, +5 min (remover após validar).
-                        com.example.invoice.InvoiceAlarmScheduler
-                            .scheduleDebugAlarmInFiveMinutes(this@MainActivity)
-                    }
                 } catch (_: Exception) {
                     // Não bloqueia a UI.
                 }
