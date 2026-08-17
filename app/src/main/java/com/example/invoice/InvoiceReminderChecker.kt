@@ -340,6 +340,7 @@ object InvoiceReminderChecker {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setVibrate(NotificationChannels.INVOICE_VIBRATION_PATTERN)
             .setContentIntent(pending)
             .setAutoCancel(true)

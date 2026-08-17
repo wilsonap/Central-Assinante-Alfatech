@@ -565,6 +565,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Remove apenas o registro visual do histórico (Room). Não toca fired/alarmes. */
+    fun deleteNotification(id: Int) {
+        viewModelScope.launch {
+            notificationDao.deleteById(id)
+        }
+    }
+
     /**
      * Toque no histórico do sino.
      * INVOICE_REMINDER → tela nativa de Faturas (sem WebView).

@@ -2,8 +2,6 @@ package com.example
 
 import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.webkit.WebView
@@ -72,11 +70,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.battery.BatteryOptimizationAssistant
 import com.example.invoice.InvoiceReminderChecker
 import com.example.notifications.NotificationChannels
+import com.example.notifications.NotificationPermissionAssistant
 import com.example.offline.OfflineStartup
 import com.example.ui.MainViewModel
 import com.example.ui.WhatsAppSupport
@@ -85,6 +83,7 @@ import com.example.ui.components.CompanyLogoImage
 import com.example.ui.screens.BatteryOptimizationPromptDialog
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NeedsFirstOnlineAuthScreen
+import com.example.ui.screens.NotificationsDisabledPromptDialog
 import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.ReceiptSenderScreen
 import com.example.ui.theme.MyApplicationTheme
@@ -323,38 +322,67 @@ fun AlfatechMainApp(
 
     var showNotificationsSheet by remember { mutableStateOf(false) }
     var showBatteryOptPrompt by remember { mutableStateOf(false) }
+    var showNotificationsDisabledPrompt by remember { mutableStateOf(false) }
 
-    // Request Android 13+ Notification Permission
+    // Request Android 13+ Notification Permission (uma vez; se negar, orientação discreta)
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { granted ->
+        NotificationPermissionAssistant.markRuntimeAsked(context)
+        if (!granted && NotificationPermissionAssistant.shouldShowDeniedGuidance(context)) {
+            showNotificationsDisabledPrompt = true
+        }
+    }
 
     LaunchedEffect(Unit) {
+        NotificationChannels.ensureCreated(context)
+        NotificationChannels.logPresentationDiagnostics(context)
         BatteryOptimizationAssistant.logStatus(context)
         if (BatteryOptimizationAssistant.shouldShowPrompt(context)) {
             showBatteryOptPrompt = true
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
+        if (NotificationPermissionAssistant.shouldRequestRuntime(context)) {
+            NotificationPermissionAssistant.markRuntimeAsked(context)
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (NotificationPermissionAssistant.shouldShowDeniedGuidance(context)) {
+            showNotificationsDisabledPrompt = true
         }
     }
 
     if (showBatteryOptPrompt) {
         BatteryOptimizationPromptDialog(
+            showXiaomiNotificationTip = BatteryOptimizationAssistant.isXiaomiFamily(),
             onAllowBackground = {
                 BatteryOptimizationAssistant.markPromptAcknowledged(context)
                 showBatteryOptPrompt = false
                 BatteryOptimizationAssistant.openBackgroundSettings(context)
+                if (NotificationPermissionAssistant.shouldShowDeniedGuidance(context)) {
+                    showNotificationsDisabledPrompt = true
+                }
+            },
+            onConfigureNotifications = {
+                NotificationPermissionAssistant.openAppNotificationSettings(context)
             },
             onDismiss = {
                 BatteryOptimizationAssistant.markPromptAcknowledged(context)
                 showBatteryOptPrompt = false
+                if (NotificationPermissionAssistant.shouldShowDeniedGuidance(context)) {
+                    showNotificationsDisabledPrompt = true
+                }
+            }
+        )
+    }
+
+    if (showNotificationsDisabledPrompt && !showBatteryOptPrompt) {
+        NotificationsDisabledPromptDialog(
+            onOpenSettings = {
+                NotificationPermissionAssistant.markDeniedGuidanceDone(context)
+                showNotificationsDisabledPrompt = false
+                NotificationPermissionAssistant.openAppNotificationSettings(context)
+            },
+            onDismiss = {
+                NotificationPermissionAssistant.markDeniedGuidanceDone(context)
+                showNotificationsDisabledPrompt = false
             }
         )
     }
@@ -711,6 +739,9 @@ fun AlfatechMainApp(
                 NotificationsScreen(
                     notifications = notifications,
                     onClearAll = { viewModel.clearAllNotifications() },
+                    onDeleteNotification = { notification ->
+                        viewModel.deleteNotification(notification.id)
+                    },
                     onNotificationClick = { notification ->
                         showNotificationsSheet = false
                         viewModel.onNotificationHistoryClick(notification)

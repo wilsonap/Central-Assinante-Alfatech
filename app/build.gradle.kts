@@ -19,8 +19,8 @@ android {
     applicationId = "br.com.sac2.alfatechtelecom.com.br"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7 
-    versionName = "1.0.7"
+    versionCode = 8 
+    versionName = "1.0.8"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -106,6 +106,7 @@ dependencies {
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
+  implementation(libs.androidx.fragment)
   // implementation(libs.androidx.camera.camera2)
   // implementation(libs.androidx.camera.core)
   // implementation(libs.androidx.camera.lifecycle)

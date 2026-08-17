@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.OpenInBrowser
@@ -32,11 +34,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.InvoiceEntity
+import com.example.invoice.InvoiceDisplayStatus
+import com.example.invoice.InvoiceDisplayStatusMapper
+import com.example.invoice.InvoiceVisualKind
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -182,7 +191,7 @@ private fun InvoiceCard(
     invoice: InvoiceEntity,
     onCopyBarcode: (String) -> Unit
 ) {
-    val statusLabel = visualStatus(invoice)
+    val display = InvoiceDisplayStatusMapper.getInvoiceDisplayStatus(invoice)
     val billingLabel = when (invoice.billingType) {
         InvoiceEntity.BILLING_BANK -> "Bancária"
         InvoiceEntity.BILLING_STORE -> "Loja / presencial"
@@ -197,27 +206,51 @@ private fun InvoiceCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Valor (principal) + status chip — valor nunca perde espaço em tela pequena
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    text = statusLabel,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
                 Text(
                     text = formatBrl(invoice.amountCents),
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontSize = 22.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
                 )
+                InvoiceStatusChip(display = display)
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(text = "Vencimento: ${formatDueDateBr(invoice.dueDate)}", fontSize = 13.sp)
-            Text(text = "Cobrança: $billingLabel", fontSize = 13.sp)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Vencimento",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = formatDueDateBr(invoice.dueDate),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Cobrança: $billingLabel",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (!invoice.rawBillingType.isNullOrBlank()) {
                 Text(
-                    text = "Tipo IXC: ${invoice.rawBillingType}",
+                    text = "Tipo: ${invoice.rawBillingType}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -241,21 +274,36 @@ private fun InvoiceCard(
     }
 }
 
-private fun visualStatus(invoice: InvoiceEntity): String {
-    val group = invoice.sourceGroup.orEmpty().lowercase(Locale.ROOT)
-    when (group) {
-        InvoiceEntity.GROUP_PAGAS -> return "Paga"
-        InvoiceEntity.GROUP_CANCELADAS -> return "Cancelada"
-        InvoiceEntity.GROUP_VENCIDAS -> return "Vencida"
-        InvoiceEntity.GROUP_ABERTAS, InvoiceEntity.GROUP_PENDENTES -> return "Em aberto"
-    }
-    val text = invoice.statusText.orEmpty().lowercase(Locale.ROOT)
-    return when {
-        text.contains("cancel") -> "Cancelada"
-        text.contains("paga") || text.contains("pago") -> "Paga"
-        text.contains("vencid") -> "Vencida"
-        else -> "Em aberto"
-    }
+@Composable
+private fun InvoiceStatusChip(display: InvoiceDisplayStatus) {
+    val (bg, fg) = statusChipColors(display.kind)
+    Text(
+        text = display.label,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = fg,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .widthIn(max = 148.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    )
+}
+
+@Composable
+private fun statusChipColors(kind: InvoiceVisualKind): Pair<Color, Color> = when (kind) {
+    InvoiceVisualKind.PAID -> Color(0xFFD1FAE5) to Color(0xFF047857)
+    InvoiceVisualKind.OPEN_FUTURE -> Color(0xFFEBF2FE) to MaterialTheme.colorScheme.primary
+    InvoiceVisualKind.DUE_TOMORROW -> Color(0xFFFEF3C7) to Color(0xFFB45309)
+    InvoiceVisualKind.DUE_TODAY -> Color(0xFFFFEDD5) to Color(0xFFC2410C)
+    InvoiceVisualKind.OVERDUE -> Color(0xFFFEE2E2) to MaterialTheme.colorScheme.error
+    InvoiceVisualKind.CANCELLED ->
+        MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    InvoiceVisualKind.FALLBACK ->
+        MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
 }
 
 private fun formatBrl(cents: Long): String {

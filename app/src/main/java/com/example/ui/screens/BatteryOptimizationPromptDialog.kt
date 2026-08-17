@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -19,7 +19,9 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun BatteryOptimizationPromptDialog(
+    showXiaomiNotificationTip: Boolean,
     onAllowBackground: () -> Unit,
+    onConfigureNotifications: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -49,15 +51,35 @@ fun BatteryOptimizationPromptDialog(
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (showXiaomiNotificationTip) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Para receber todos os avisos, permita também notificações flutuantes e notificações na tela de bloqueio nas configurações do aplicativo.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = onAllowBackground,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Permitir execução em segundo plano")
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onAllowBackground,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Permitir execução em segundo plano")
+                }
+                if (showXiaomiNotificationTip) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onConfigureNotifications,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Configurar notificações")
+                    }
+                }
             }
         },
         dismissButton = {

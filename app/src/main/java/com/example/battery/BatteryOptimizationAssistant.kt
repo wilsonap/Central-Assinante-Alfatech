@@ -49,6 +49,14 @@ object BatteryOptimizationAssistant {
         return isBatteryOptimizationEnabled(context)
     }
 
+    /** Xiaomi / Redmi / POCO — tip opcional de flutuantes e tela de bloqueio (MIUI). */
+    fun isXiaomiFamily(): Boolean {
+        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
+        return manufacturer.contains("xiaomi") ||
+            manufacturer.contains("redmi") ||
+            manufacturer.contains("poco")
+    }
+
     /**
      * Abre a tela de configurações mais adequada ao fabricante.
      * Não solicita isenção automaticamente.
