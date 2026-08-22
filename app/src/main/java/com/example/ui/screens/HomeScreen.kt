@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -60,7 +61,8 @@ fun HomeScreen(
     onNavigateToUrl: (urlPath: String, title: String) -> Unit,
     onWhatsAppClick: () -> Unit = {},
     onReceiptClick: () -> Unit = {},
-    onReceiptHistoryClick: () -> Unit = {}
+    onReceiptHistoryClick: () -> Unit = {},
+    onSpeedTestClick: () -> Unit = {}
 ) {
     val shortcuts = listOf(
         CentralShortcut(
@@ -86,6 +88,14 @@ fun HomeScreen(
             icon = Icons.Default.History,
             iconTint = Color(0xFF059669),
             iconBackground = Color(0xFFECFDF5)
+        ),
+        CentralShortcut(
+            title = "Teste de velocidade",
+            subtitle = "Meça a velocidade da sua conexão",
+            urlPath = "__speedtest__",
+            icon = Icons.Default.Speed,
+            iconTint = Color(0xFF0369A1),
+            iconBackground = Color(0xFFE0F2FE)
         ),
         CentralShortcut(
             title = "Consumo",
@@ -256,6 +266,7 @@ fun HomeScreen(
                             "__whatsapp__" -> onWhatsAppClick()
                             "__receipt__" -> onReceiptClick()
                             "__receipt_history__" -> onReceiptHistoryClick()
+                            "__speedtest__" -> onSpeedTestClick()
                             else -> onNavigateToUrl(shortcut.urlPath, shortcut.title)
                         }
                     },

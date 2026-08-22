@@ -98,6 +98,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showReceiptHistory = MutableStateFlow(false)
     val showReceiptHistory: StateFlow<Boolean> = _showReceiptHistory.asStateFlow()
 
+    private val _showSpeedTest = MutableStateFlow(false)
+    val showSpeedTest: StateFlow<Boolean> = _showSpeedTest.asStateFlow()
 
     // 0 = Home, 1 = WebView Central, 2 = Faturas nativas (Room)
     private val _currentScreen = MutableStateFlow(1)
@@ -402,6 +404,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeReceiptHistory() {
         _showReceiptHistory.value = false
+    }
+
+    fun openSpeedTest() {
+        _showSpeedTest.value = true
+    }
+
+    fun closeSpeedTest() {
+        _showSpeedTest.value = false
     }
 
     fun refreshReceiptStorageStats() {

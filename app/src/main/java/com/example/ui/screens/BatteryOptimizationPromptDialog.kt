@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -17,69 +16,45 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/**
+ * Orientação opcional MIUI (Xiaomi / Redmi / POCO).
+ * Recomendação — não obrigatória.
+ */
 @Composable
 fun BatteryOptimizationPromptDialog(
-    showXiaomiNotificationTip: Boolean,
-    onAllowBackground: () -> Unit,
-    onConfigureNotifications: () -> Unit,
+    onConfigure: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Otimização de bateria",
+                text = "Avisos neste aparelho",
                 fontWeight = FontWeight.Bold
             )
         },
         text = {
             Column {
                 Text(
-                    text = "A economia de bateria do Android pode limitar tarefas em segundo plano.",
+                    text = "Para garantir o recebimento de avisos em alguns aparelhos Xiaomi, Redmi e POCO, recomendamos permitir a inicialização automática e manter as notificações sem restrições.",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Isso pode afetar lembretes de vencimento das faturas e outras notificações quando o aplicativo estiver fechado.",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Recomendamos permitir a execução em segundo plano para este aplicativo. Nenhuma configuração será alterada automaticamente.",
+                    text = "Isso é apenas uma recomendação. Também ajuda permitir notificações flutuantes e na tela de bloqueio. Nenhuma configuração será alterada automaticamente.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (showXiaomiNotificationTip) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Para receber todos os avisos, permita também notificações flutuantes e notificações na tela de bloqueio nas configurações do aplicativo.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         },
         confirmButton = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = onAllowBackground,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Permitir execução em segundo plano")
-                }
-                if (showXiaomiNotificationTip) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = onConfigureNotifications,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Configurar notificações")
-                    }
-                }
+            Button(
+                onClick = onConfigure,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Configurar")
             }
         },
         dismissButton = {

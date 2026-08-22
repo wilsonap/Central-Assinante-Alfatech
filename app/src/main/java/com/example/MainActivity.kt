@@ -86,6 +86,7 @@ import com.example.ui.screens.NeedsFirstOnlineAuthScreen
 import com.example.ui.screens.NotificationsDisabledPromptDialog
 import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.ReceiptSenderScreen
+import com.example.ui.screens.SpeedTestScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.update.InAppUpdateCoordinator
 import kotlinx.coroutines.Dispatchers
@@ -132,6 +133,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
+                val showSpeedTest by viewModel.showSpeedTest.collectAsState()
+                LaunchedEffect(showSpeedTest) {
+                    // Libera o BackHandler da SpeedTestScreen (goBack / fechar).
+                    centralBackCallback.isEnabled = !showSpeedTest
+                }
                 AlfatechMainApp(
                     viewModel = viewModel,
                     onWebViewCreated = { webView ->
@@ -177,6 +183,8 @@ class MainActivity : ComponentActivity() {
     fun reassertBackCallback() {
         centralBackCallback.remove()
         onBackPressedDispatcher.addCallback(this, centralBackCallback)
+        // Speedtest usa BackHandler próprio — manter desabilitado enquanto aberto.
+        centralBackCallback.isEnabled = !viewModel.showSpeedTest.value
     }
 
     private fun handleCentralOrSystemBack() {
@@ -304,6 +312,7 @@ fun AlfatechMainApp(
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
     val showReceiptSender by viewModel.showReceiptSender.collectAsState()
     val showReceiptHistory by viewModel.showReceiptHistory.collectAsState()
+    val showSpeedTest by viewModel.showSpeedTest.collectAsState()
     val receiptHistory by viewModel.receiptHistory.collectAsState()
     val receiptStorageCount by viewModel.receiptStorageCount.collectAsState()
     val receiptStorageBytes by viewModel.receiptStorageBytes.collectAsState()
@@ -351,17 +360,13 @@ fun AlfatechMainApp(
 
     if (showBatteryOptPrompt) {
         BatteryOptimizationPromptDialog(
-            showXiaomiNotificationTip = BatteryOptimizationAssistant.isXiaomiFamily(),
-            onAllowBackground = {
+            onConfigure = {
                 BatteryOptimizationAssistant.markPromptAcknowledged(context)
                 showBatteryOptPrompt = false
                 BatteryOptimizationAssistant.openBackgroundSettings(context)
                 if (NotificationPermissionAssistant.shouldShowDeniedGuidance(context)) {
                     showNotificationsDisabledPrompt = true
                 }
-            },
-            onConfigureNotifications = {
-                NotificationPermissionAssistant.openAppNotificationSettings(context)
             },
             onDismiss = {
                 BatteryOptimizationAssistant.markPromptAcknowledged(context)
@@ -642,7 +647,7 @@ fun AlfatechMainApp(
             )
 
             // Render Native Home Screen on top when currentScreen == 0
-            if (currentScreen == 0 && !showReceiptSender && !showReceiptHistory) {
+            if (currentScreen == 0 && !showReceiptSender && !showReceiptHistory && !showSpeedTest) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -671,12 +676,13 @@ fun AlfatechMainApp(
                             }
                         },
                         onReceiptClick = { viewModel.openReceiptSender() },
-                        onReceiptHistoryClick = { viewModel.openReceiptHistory() }
+                        onReceiptHistoryClick = { viewModel.openReceiptHistory() },
+                        onSpeedTestClick = { viewModel.openSpeedTest() }
                     )
                 }
             }
 
-            if (currentScreen == 2 && !showReceiptSender && !showReceiptHistory) {
+            if (currentScreen == 2 && !showReceiptSender && !showReceiptHistory && !showSpeedTest) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -726,6 +732,19 @@ fun AlfatechMainApp(
                         storageBytes = receiptStorageBytes,
                         onClose = { viewModel.closeReceiptHistory() },
                         onDeleted = { viewModel.refreshReceiptStorageStats() }
+                    )
+                }
+            }
+
+            if (showSpeedTest) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    SpeedTestScreen(
+                        onClose = { viewModel.closeSpeedTest() }
                     )
                 }
             }
